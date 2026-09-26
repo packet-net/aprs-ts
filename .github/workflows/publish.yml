@@ -1,6 +1,6 @@
 name: publish
 
-# Publishes pdn-aprs to npmjs.com on any tag matching v*. The version is taken from the
+# Publishes @packet-net/pdn-aprs to npmjs.com on any tag matching v*. The version is taken from the
 # tag (without the leading v), so tagging v0.1.0 publishes 0.1.0.
 #
 # npm trusted publishing (OIDC): npmjs.com trusts this repository and this workflow file, so the
@@ -52,7 +52,7 @@ jobs:
           echo "Publishing version: ${version}"
 
   publish-npm:
-    name: publish pdn-aprs to npmjs.com
+    name: publish @packet-net/pdn-aprs to npmjs.com
     needs: resolve-version
     runs-on: ubuntu-latest
     permissions:

@@ -1,4 +1,4 @@
-# pdn-aprs
+# @packet-net/pdn-aprs
 
 An APRS (Automatic Packet Reporting System) encoder and decoder for TypeScript.
 
@@ -15,13 +15,13 @@ It is conformance tested against [aprs-vectors](https://github.com/packet-net/ap
 ## Install
 
 ```sh
-npm install pdn-aprs
+npm install @packet-net/pdn-aprs
 ```
 
 ## Decoding
 
 ```ts
-import { decodeTnc2 } from 'pdn-aprs';
+import { decodeTnc2 } from '@packet-net/pdn-aprs';
 
 const packet = decodeTnc2('M0LTE-9>APDR16,WIDE1-1,qAR,G4ABC-10:=5127.00N/00058.80W>088/036/A=000100 Mobile');
 
@@ -42,7 +42,7 @@ if (packet.data.type === 'position') {
 A Mic-E report carries half its position in the destination address; the decoder reads both.
 
 ```ts
-import { decodeTnc2 } from 'pdn-aprs';
+import { decodeTnc2 } from '@packet-net/pdn-aprs';
 
 const micE = decodeTnc2('N0CALL>S32UVT:`(_fn"Oj/');
 if (micE.data.type === 'mic-e') {
@@ -59,7 +59,7 @@ AX.25 frames (address, control, PID and information fields, no flags or FCS) dec
 Real packets are often not quite right. The decoder reports everything it noticed, each with a severity and a code from the vectors' [codes.json](https://github.com/packet-net/aprs-vectors/blob/main/codes.json). By default it is lenient: a defect a receiver can safely work around is a `warning`, and the packet still decodes. A strict decoder rejects it instead, and the data is `unrecognized`.
 
 ```ts
-import { decodeTnc2, formatDiagnostic, ParseOptions } from 'pdn-aprs';
+import { decodeTnc2, formatDiagnostic, ParseOptions } from '@packet-net/pdn-aprs';
 
 const line = 'N1EOE>APN391:!4216.95n/07243.20w#';
 
@@ -81,7 +81,7 @@ console.log(almostStrict.data.type); // position
 `Aprs.from(...)` starts a packet; pick what it is, set what you need, and `build()` encodes it.
 
 ```ts
-import { Aprs, Symbols } from 'pdn-aprs';
+import { Aprs, Symbols } from '@packet-net/pdn-aprs';
 
 const packet = Aprs.from('M0LTE-9')
   .via('WIDE1-1', 'WIDE2-1')
@@ -100,7 +100,7 @@ console.log(frame.length); // 63
 The destination defaults to `APZ001` in the experimental range; give your application's own with `.to(...)`. The builder covers what an application usually sends:
 
 ```ts
-import { Aprs, Symbols } from 'pdn-aprs';
+import { Aprs, Symbols } from '@packet-net/pdn-aprs';
 
 const station = Aprs.from('M0LTE');
 
@@ -136,7 +136,7 @@ console.log(station.micE(51.5, -0.1234).symbol(Symbols.car).micEMessage('en-rout
 Anything the spec does not allow is refused when you build it, with an `AprsEncodeError` saying why: message text over 67 characters, an object name with a trailing space, two data extensions at once. Free text is checked by decoding what was written, so a comment that would read back as something else (an altitude, a PHG code, a `!DAO!`) gets a `/` delimiter in front if that fixes it, and is refused if not.
 
 ```ts
-import { Aprs, AprsEncodeError } from 'pdn-aprs';
+import { Aprs, AprsEncodeError } from '@packet-net/pdn-aprs';
 
 try {
   Aprs.from('M0LTE').position(51.45, -0.98).comment('at /A=001234').build();
@@ -152,7 +152,7 @@ The encoder also works on data directly: `encodeInformation(data)` returns the i
 Every symbol the APRS symbol tables define is available by name, with its description. Symbols in the alternate table can carry an overlay character.
 
 ```ts
-import { describeSymbol, Symbols, symbolName, withOverlay } from 'pdn-aprs';
+import { describeSymbol, Symbols, symbolName, withOverlay } from '@packet-net/pdn-aprs';
 
 console.log(Symbols.car.table + Symbols.car.code); // />
 console.log(describeSymbol(Symbols.digipeater)); // Digi (green star with white center)
@@ -167,7 +167,7 @@ console.log(symbolName(igate)); // gateway
 `packet.device` identifies the sending device or software from the [APRS device identification database](https://github.com/aprsorg/aprs-deviceid): by the destination address, or for a Mic-E report by its type code and suffix. `identifyTocall` looks one up directly.
 
 ```ts
-import { identifyTocall } from 'pdn-aprs';
+import { identifyTocall } from '@packet-net/pdn-aprs';
 
 console.log(identifyTocall('APDW18')?.model); // DireWolf
 ```
