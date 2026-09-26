@@ -13,7 +13,7 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 /** Turns `console.log(expr); // expected` (possibly spread over lines) into a check. */
 function instrument(code: string): string {
-  const src = code.replace(/from '@packet-net\/aprs'/g, "from '../../src/index.js'");
+  const src = code.replace(/from 'pdn-aprs'/g, "from '../../src/index.js'");
   const out: string[] = [];
   const lines = src.split('\n');
   let pending: string[] = [];

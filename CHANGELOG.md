@@ -10,4 +10,4 @@ First release.
 - A fluent builder (`Aprs.from(...)`) for positions, objects, items, Mic-E, messages and acks, status, weather, telemetry and telemetry metadata, bulletins.
 - Every symbol the APRS tables define, by name (`Symbols.car`), with overlays (`withOverlay`).
 - Device identification from the APRS device identification database (commit 845e3f89).
-- Passes every check of aprs-vectors (commit 65cb767); `scripts/diff-dump.mjs` writes the differential dump its `tools/compare.py` reads.
+- Passes every check of aprs-vectors (commit a16bde8, 5,523 checks); `scripts/diff-dump.mjs` writes the differential dump its `tools/compare.py` reads.

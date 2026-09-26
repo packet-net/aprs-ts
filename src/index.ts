@@ -1,4 +1,4 @@
-// @packet-net/aprs: an APRS encoder and decoder.
+// pdn-aprs: an APRS encoder and decoder.
 
 export * from './types.js';
 export * from './codes.js';
