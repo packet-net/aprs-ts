@@ -1,5 +1,5 @@
 {
-  "name": "pdn-aprs",
+  "name": "@packet-net/pdn-aprs",
   "version": "0.1.0",
   "description": "APRS encoder and decoder for TypeScript: every data type, strict and lenient decoding, an encoder that refuses what the spec does not allow, named symbols, device identification, and a fluent packet builder. Zero dependencies; browsers and Node.",
   "repository": {
