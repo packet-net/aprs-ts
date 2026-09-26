@@ -164,7 +164,9 @@ export function encodeTelemetryReport(d: TelemetryReport): string {
   const values = d.analog.map((v, i) => {
     if (v === null) return '';
     const t = d.analogText?.[i];
-    return t !== undefined && t !== null && Number(t) === v ? t : numberText(v);
+    if (t !== undefined && t !== null && Number(t) === v) return t;
+    // The classic form: three digits, 000-999 (APRS12c ch. 13).
+    return Number.isInteger(v) && v >= 0 && v <= 999 ? pad(v, 3) : numberText(v);
   });
   const seq = d.sequence === 'MIC' ? 'MIC' : `${d.sequence},`;
   return `T#${seq}${values.join(',')},${d.bits}${freeText(d.comment ?? '', 'the comment')}`;
@@ -187,7 +189,6 @@ export function encodeNmea(d: NmeaSentence): string {
   if (!/^[A-Z]{5},[\x20-\x7e]*$/.test(d.sentence)) refuse('not an NMEA sentence');
   const checksum = nmeaChecksumOk(d.sentence);
   if (checksum === false) refuse("the NMEA sentence's checksum does not match");
-  if (checksum === undefined && d.sentence.includes('*')) refuse('the NMEA checksum is malformed');
   return `$${d.sentence}`;
 }
 

@@ -1,0 +1,92 @@
+name: publish
+
+# Publishes @packet-net/aprs to npmjs.com on any tag matching v*. The version is taken from the
+# tag (without the leading v), so tagging v0.1.0 publishes 0.1.0.
+#
+# npm trusted publishing (OIDC): npmjs.com trusts this repository and this workflow file, so the
+# runner mints a short-lived token per run and there is no long-lived NPM_TOKEN secret. Trusted
+# publishing attaches a provenance attestation, which npm only accepts from GitHub-hosted runners.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    # A manual run publishes for real (there is no secret to leave unset), so it needs a version.
+    inputs:
+      override_version:
+        description: 'Version to publish (manual runs only; a tag push takes the version from the tag)'
+        required: false
+        default: ''
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-version:
+    name: resolve version from tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - id: parse
+        env:
+          EVENT: ${{ github.event_name }}
+          OVERRIDE: ${{ inputs.override_version }}
+        run: |
+          if [ "$EVENT" = "push" ]; then
+            tag="${GITHUB_REF#refs/tags/}"
+            version="${tag#v}"
+          else
+            version="$OVERRIDE"
+          fi
+          if [ -z "$version" ]; then
+            echo "::error::No version resolved (ref was '${GITHUB_REF}', input was empty)."
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: ${version}"
+
+  publish-npm:
+    name: publish @packet-net/aprs to npmjs.com
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.resolve-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # prepublishOnly runs the tests, which need the conformance vectors.
+          submodules: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org/'
+
+      - name: ensure an npm that speaks trusted publishing
+        # Trusted publishing needs npm 11.5.1 or later.
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: pin version from tag
+        run: npm pkg set "version=${VERSION}"
+
+      - name: install and build
+        run: |
+          npm ci
+          npm run build
+
+      - name: pack (dry run)
+        run: npm pack --dry-run
+
+      - name: publish
+        run: npm publish --access public

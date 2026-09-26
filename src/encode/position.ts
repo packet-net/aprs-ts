@@ -138,7 +138,7 @@ function altitudeText(feet: number): string {
 
 export function frequencyText(f: VoiceFrequency): string {
   const mhz = f.mhz;
-  if (!(mhz > 0)) refuse('the frequency is not positive');
+  if (!(mhz >= 0)) refuse('the frequency is negative');
   let whole3: string;
   let fraction: string;
   const resolution = f.tenKhzResolution ? 100 : 1000;

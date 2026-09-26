@@ -283,6 +283,7 @@ export function parseCompressed(ctx: DecodeContext, s: string, i: number): RawPo
 /** Parses a position at `i`, uncompressed or compressed by its first byte. */
 export function parsePosition(ctx: DecodeContext, s: string, i: number): RawPosition {
   const c = s[i];
+  if (c === undefined) ctx.fail('truncated');
   if (isDigit(c)) return parseUncompressed(ctx, s, i);
   if (isCompressedTable(c)) return parseCompressed(ctx, s, i);
   return ctx.fail('invalid-position');
@@ -535,7 +536,7 @@ function frequencyAt(s: string): FrequencyFound | undefined {
     freq.offsetKhz = (r[1] === '-' ? -1 : 1) * Number(r[2]) * 10;
     p += 1 + r[0].length;
   }
-  r = fieldAt(/^R([0-9]{2,3})([mk])/);
+  r = fieldAt(/^R([0-9]{2})([mk])/);
   if (r) {
     freq.range = Number(r[1]);
     if (r[2] === 'k') freq.rangeKm = true;
@@ -902,11 +903,15 @@ function parseWeatherFields(ctx: DecodeContext, s: string, j: number, options: W
 
 const SOFTWARE_UNIT_RE = /^([A-Za-z])([A-Za-z0-9_-]{2,4})$/;
 
-/** The software type and unit after the weather fields, or the weather comment. */
+/**
+ * The software type and unit after the weather fields, or the weather comment. One leading
+ * delimiter is dropped from a position's comment, not from a positionless report's.
+ */
 function weatherTail(
   ctx: DecodeContext,
   w: MutableWeather,
   rest: string,
+  dropDelimiter = true,
 ): { comment?: string; telemetry?: CommentTelemetry; dao?: DaoFound } {
   const lifted = liftTelemetryAndDao(rest);
   const out: { comment?: string; telemetry?: CommentTelemetry; dao?: DaoFound } = {};
@@ -921,7 +926,7 @@ function weatherTail(
     return out;
   }
   ctx.tolerate('weather-comment');
-  if (text[0] === ' ' || text[0] === '/') text = text.slice(1);
+  if (dropDelimiter && (text[0] === ' ' || text[0] === '/')) text = text.slice(1);
   if (text.length > 0) out.comment = text;
   return out;
 }
@@ -933,7 +938,7 @@ export function parsePositionlessWeather(
   j: number,
 ): { weather: Weather; comment?: string } {
   const parsed = parseWeatherFields(ctx, s, j, { wind: { present: false }, positionless: true });
-  const tail = weatherTail(ctx, parsed.weather, s.slice(parsed.end));
+  const tail = weatherTail(ctx, parsed.weather, s.slice(parsed.end), false);
   const out: { weather: Weather; comment?: string } = { weather: parsed.weather };
   if (tail.comment !== undefined) out.comment = ctx.text(tail.comment);
   return out;

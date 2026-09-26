@@ -151,11 +151,13 @@ export function decodeCapabilities(ctx: DecodeContext, s: string): Capabilities 
   let freeText = false;
   for (const raw of text.split(',')) {
     const item = raw.trim();
+    if (item.length === 0) continue; // empty items are skipped
     const eq = item.indexOf('=');
     const token = eq < 0 ? item : item.slice(0, eq);
     if (/\s/.test(token) || token.length === 0) freeText = true;
     capabilities.push(eq < 0 ? [item] : [token, item.slice(eq + 1)]);
   }
+  if (capabilities.length === 0) ctx.fail('invalid-capabilities');
   if (freeText) ctx.tolerate('free-text-capabilities');
   return { type: 'capabilities', capabilities };
 }
@@ -208,7 +210,6 @@ export function decodeDollar(ctx: DecodeContext, s: string): NmeaSentence | RawW
   if (!/^[A-Z]{5},[\x20-\x7e]*$/.test(sentence)) ctx.fail('invalid-nmea');
   const checksum = nmeaChecksumOk(sentence);
   if (checksum === false) ctx.fail('nmea-checksum-mismatch');
-  if (checksum === undefined && sentence.includes('*')) ctx.fail('invalid-nmea');
   const body = checksum === undefined ? sentence : sentence.slice(0, sentence.length - 3);
   const f = body.split(',');
   const out: { -readonly [K in keyof NmeaSentence]: NmeaSentence[K] } = { type: 'nmea', sentence };

@@ -128,7 +128,7 @@ export function formatTnc2Header(source: string, destination: string, path: read
   return path.length === 0 ? `${source}>${destination}` : `${source}>${destination},${formatPath(path)}`;
 }
 
-const Q_CONSTRUCT = /^qA[CXUoOSrRZI]$/;
+const Q_CONSTRUCT = /^qA[A-Za-z]$/;
 
 /** The APRS-IS q-construct in a path, and the station after it. */
 export function findQConstruct(path: readonly PathEntry[]): QConstruct | undefined {

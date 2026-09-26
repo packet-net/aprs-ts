@@ -1,0 +1,63 @@
+name: ci
+
+# Typecheck, build and test on every push and pull request, on GitHub's hosted runners, on
+# Node 20, 22 and 24. The tests run every conformance vector (the vectors submodule) with every
+# check its README defines, and the README examples.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22', '24']
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+
+  checks:
+    name: package and text checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: no runtime dependencies
+        run: node -e "const p=require('./package.json'); if (Object.keys(p.dependencies||{}).length) { console.error('runtime dependencies:', p.dependencies); process.exit(1); }"
+      - name: the package imports in Node without Node-only APIs in the library
+        run: node --input-type=module -e "import('./dist/index.js').then(m => { if (typeof m.decodeTnc2 !== 'function') process.exit(1); })"
+      - name: no em or en dashes in our own text
+        # The device database (src/deviceid-data.ts) is copied verbatim and exempt.
+        run: |
+          if grep -rnP '[\x{2013}\x{2014}]' --exclude=deviceid-data.ts src test scripts .github README.md CHANGELOG.md THIRD-PARTY-NOTICES.md package.json; then
+            echo "::error::em or en dash found"
+            exit 1
+          fi
+      - run: npm pack --dry-run
