@@ -389,7 +389,8 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
   if (f.altitudeFeet !== undefined && !altitudeInCs) out += altitudeText(f.altitudeFeet);
   const extensionEnded = !f.compressed && (hasCourse || exts.length > 0) && f.altitudeFeet === undefined;
   let text = '';
-  if (f.frequency) text += (extensionEnded ? '/' : '') + frequencyText(f.frequency);
+  // A frequency straight after a 7-byte extension is separated from it by / (a PHGR already ends in one).
+  if (f.frequency) text += (extensionEnded && !out.endsWith('/') ? '/' : '') + frequencyText(f.frequency);
   let braces = '';
   if (f.signpost !== undefined) {
     if (!/^[\x21-\x7c\x7e]{1,3}$/.test(f.signpost) || f.signpost.includes('{') || f.signpost.includes('}')) refuse('a signpost is 1-3 printable characters');
@@ -576,7 +577,7 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   const truncate = d.dao !== undefined || ambiguity > 0;
   const lat = digitsOf(d.latitude, truncate);
   const lon = digitsOf(d.longitude, truncate);
-  if (lat.degrees > 89) refuse('Mic-E latitude is below 90 degrees');
+  if (lat.degrees > 90 || (lat.degrees === 90 && lat.hundredths > 0)) refuse('latitude is out of range');
   if (lon.degrees > 179) refuse('Mic-E longitude is below 180 degrees');
   const destination = micEDestination(d, lat, lon.degrees);
   // Longitude
@@ -628,7 +629,7 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   }
   if (altitudeInComment !== undefined) after += altitudeText(altitudeInComment);
   let rest = '';
-  if (d.frequency) rest += (exts > 0 && altitudeInComment === undefined ? '/' : '') + frequencyText(d.frequency);
+  if (d.frequency) rest += (exts > 0 && altitudeInComment === undefined && !after.endsWith('/') ? '/' : '') + frequencyText(d.frequency);
   const comment = d.comment ?? '';
   if (comment.length > 0 || mode === 'delimited') {
     if (rest.length > 0 && mode !== 'joined') rest += ' ';

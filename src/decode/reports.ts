@@ -222,6 +222,10 @@ function decodeMicEDestination(ctx: DecodeContext, destination: string): MicEDes
   let ambiguity = 0;
   for (let k = 5; k >= 2 && digits[k] === ' '; k--) ambiguity++;
   for (let k = 0; k < 6 - ambiguity; k++) if (!isDigit(digits[k])) ctx.fail('invalid-mic-e-destination');
+  const num = (c: string): number => (c === ' ' ? 0 : c.charCodeAt(0) - 48);
+  const degrees = num(digits[0]!) * 10 + num(digits[1]!);
+  const minutes = num(digits[2]!) * 10 + num(digits[3]!) + (num(digits[4]!) * 10 + num(digits[5]!)) / 100;
+  if (minutes >= 60 || degrees > 90 || (degrees === 90 && minutes > 0)) ctx.fail('invalid-mic-e-destination');
   const bits = kinds.slice(0, 3);
   const hasStd = bits.includes('std');
   const hasCustom = bits.includes('custom');
@@ -259,8 +263,6 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
   const d = dest.digits;
   const num = (c: string): number => (c === ' ' ? 0 : c.charCodeAt(0) - 48);
   const latDegrees = num(d[0]!) * 10 + num(d[1]!);
-  const rawLatMinutes = num(d[2]!) * 10 + num(d[3]!);
-  if (latDegrees > 89 || rawLatMinutes > 59) ctx.fail('invalid-mic-e-destination');
   const latMinutes = micEMinutes(num(d[2]!), num(d[3]!), num(d[4]!) * 10 + num(d[5]!), dest.ambiguity);
   // Longitude
   let lonDegrees = b(1) - 28;

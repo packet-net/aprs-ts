@@ -92,11 +92,11 @@ export function decodeMessage(ctx: DecodeContext, s: string): AprsData {
   }
 
   const split = splitMessageId(ctx, body);
-  const text = ctx.text(split.text);
 
-  // Telemetry metadata.
-  const meta = telemetryMetadata(ctx, addressee, text, split.messageId);
+  // Telemetry metadata: its structure is checked before the text's encoding.
+  const meta = telemetryMetadata(ctx, addressee, split.text, split.messageId);
   if (meta) return meta;
+  const text = ctx.text(split.text);
 
   const message: { type: 'message'; addressee: string; text: string; messageId?: string; replyAck?: string } = {
     type: 'message',
@@ -145,28 +145,29 @@ function directedQuery(ctx: DecodeContext, addressee: string, body: string): Apr
   return undefined;
 }
 
+/** Telemetry metadata sent as a message; `binary` is the text's bytes, decoded once it is valid. */
 function telemetryMetadata(
   ctx: DecodeContext,
   addressee: string,
-  text: string,
+  binary: string,
   messageId: string | undefined,
 ): AprsData | undefined {
-  const kind = text.slice(0, 5);
+  const kind = binary.slice(0, 5);
   if (kind !== 'PARM.' && kind !== 'UNIT.' && kind !== 'EQNS.' && kind !== 'BITS.') return undefined;
-  const body = text.slice(5);
+  const rawBody = binary.slice(5);
   const invalid = (): undefined => {
     ctx.info('invalid-telemetry-metadata');
     return undefined;
   };
   if (kind === 'PARM.' || kind === 'UNIT.') {
-    const list = parseList(body);
-    if (list.length > 13) return invalid();
+    if (parseList(rawBody).length > 13) return invalid();
+    const list = parseList(ctx.text(rawBody));
     return kind === 'PARM.'
       ? withId({ type: 'telemetry-names' as const, addressee, names: list }, messageId)
       : withId({ type: 'telemetry-units' as const, addressee, units: list }, messageId);
   }
   if (kind === 'EQNS.') {
-    const list = parseList(body);
+    const list = parseList(rawBody);
     // Trailing empty entries (commas and spaces) are the list stopping.
     while (list.length > 0 && list[list.length - 1]!.trim() === '') list.pop();
     if (list.length === 0 || list.length > 15) return invalid();
@@ -181,13 +182,13 @@ function telemetryMetadata(
       messageId,
     );
   }
-  const m = /^([01]{8})(?:,(.*))?$/s.exec(body);
+  const m = /^([01]{8})(?:,(.*))?$/s.exec(rawBody);
   if (!m) return invalid();
   const bits: { type: 'telemetry-bits'; addressee: string; bits: string; project?: string } = {
     type: 'telemetry-bits',
     addressee,
     bits: m[1]!,
   };
-  if (m[2] !== undefined && m[2].length > 0) bits.project = m[2];
+  if (m[2] !== undefined && m[2].length > 0) bits.project = ctx.text(m[2]);
   return withId(bits, messageId);
 }

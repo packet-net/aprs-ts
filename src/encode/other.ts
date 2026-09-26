@@ -213,7 +213,7 @@ export function encodeCapabilities(d: Capabilities): string {
   if (d.capabilities.length === 0) refuse('capabilities need at least one item');
   const items = d.capabilities.map((c) => {
     const token = c[0];
-    if (!/^[\x21-\x7e]+$/.test(token) || token.includes(',') || token.includes('=')) refuse('a capability token is printable, with no space, comma or =');
+    if (token.length === 0 || /[\s,=]/.test(token)) refuse('a capability token has no space, comma or =');
     if (c.length === 1) return token;
     const value = c[1]!;
     if (value.includes(',') || /^\s|\s$/.test(value)) refuse('a capability value has no comma or edge spaces');
