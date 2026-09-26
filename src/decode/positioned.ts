@@ -197,8 +197,9 @@ export function parseUncompressed(ctx: DecodeContext, s: string, i: number): Raw
     lonDegrees,
     lonMinutes,
     lonWest: ew === 'W',
-    latitude: latitude === 0 ? 0 : latitude,
-    longitude: longitude === 0 ? 0 : longitude,
+    // A zero coordinate keeps its hemisphere as the sign of zero, so it is written back the same.
+    latitude,
+    longitude,
     ambiguity: latAmbiguity,
     symbol: { table, code },
     compressed: false,
@@ -969,8 +970,8 @@ export function applyDao(ctx: DecodeContext, f: Fields, pos: RawPosition, dao: D
   }
   const lat = (pos.latSouth ? -1 : 1) * (pos.latDegrees + (pos.latMinutes + dao.latAdd) / 60);
   const lon = (pos.lonWest ? -1 : 1) * (pos.lonDegrees + (pos.lonMinutes + dao.lonAdd) / 60);
-  f.latitude = lat === 0 ? 0 : lat;
-  f.longitude = lon === 0 ? 0 : lon;
+  f.latitude = lat;
+  f.longitude = lon;
 }
 
 function decodeExtensionAndComment(

@@ -17,4 +17,13 @@ export {
   type Neutral,
 } from './neutral.js';
 export { bytesToHex, hexToBytes, encodeUtf8, decodeUtf8 } from './bytes.js';
-export { AprsEncodeError, encodeInformation } from './encode/index.js';
+export {
+  AprsEncodeError,
+  encodeInformation,
+  encodeTnc2,
+  encodeTnc2Bytes,
+  encodeAx25,
+  wrapKiss,
+  type EncodedInformation,
+  type PacketToEncode,
+} from './encode/index.js';
