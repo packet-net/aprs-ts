@@ -1,0 +1,65 @@
+{
+  "name": "@packet-net/aprs",
+  "version": "0.1.0",
+  "description": "APRS encoder and decoder for TypeScript: every data type, strict and lenient decoding, an encoder that refuses what the spec does not allow, named symbols, device identification, and a fluent packet builder. Zero dependencies; browsers and Node.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/packet-net/aprs-ts.git"
+  },
+  "homepage": "https://github.com/packet-net/aprs-ts#readme",
+  "bugs": {
+    "url": "https://github.com/packet-net/aprs-ts/issues"
+  },
+  "license": "AGPL-3.0-or-later",
+  "author": "Tom Fanning M0LTE",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/**",
+    "src/**",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "generate:deviceid": "node scripts/generate-deviceid.mjs",
+    "generate:symbols": "node scripts/generate-symbols.mjs",
+    "diff-dump": "node scripts/diff-dump.mjs",
+    "prepublishOnly": "npm run typecheck && npm run build && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11",
+    "yaml": "^2.9.1"
+  },
+  "keywords": [
+    "aprs",
+    "amateur-radio",
+    "ham-radio",
+    "packet-radio",
+    "ax25",
+    "kiss",
+    "mic-e",
+    "aprs-is",
+    "decoder",
+    "encoder"
+  ]
+}

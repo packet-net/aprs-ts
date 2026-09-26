@@ -1,0 +1,4 @@
+{
+  "description": "Vector checks this implementation does not pass, each with the reason. The conformance test skips the listed checks and reports them as skipped with the reason in the test name. Checks are lenient, strict, tolerance, reencode and encode.",
+  "differences": []
+}
