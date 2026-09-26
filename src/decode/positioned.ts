@@ -1147,11 +1147,6 @@ function decodeWeatherAfterPosition(
 
 // ---- Mic-E status text
 
-export interface MicEText {
-  fields: Partial<Fields>;
-  dao?: DaoFound;
-}
-
 /** Lifts the elements out of Mic-E status text after its type code, altitude and locator. */
 export function liftMicEComment(ctx: DecodeContext, text: string, symbol: AprsSymbol): { lifted: Lifted } {
   const lifted = liftComment(ctx, text, { extensionFound: false, extensionAtStart: true, symbol });

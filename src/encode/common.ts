@@ -61,14 +61,13 @@ export function timestamp7(t: AprsTimestamp): string {
   }
 }
 
-export function checkSymbol(symbol: AprsSymbol, compressed: boolean): void {
+export function checkSymbol(symbol: AprsSymbol): void {
   if (symbol.code.length !== 1 || symbol.table.length !== 1) refuse('a symbol is a table and a code, one character each');
   const code = symbol.code.charCodeAt(0);
   if (code < 0x21 || code > 0x7e) refuse('the symbol code is not printable ASCII');
   const t = symbol.table;
   const ok = t === '/' || t === '\\' || (t >= '0' && t <= '9') || (t >= 'A' && t <= 'Z');
   if (!ok) refuse(`the symbol table ${JSON.stringify(t)} is not /, \\, 0-9 or A-Z`);
-  void compressed;
 }
 
 export function base91(value: number, width: number): string {

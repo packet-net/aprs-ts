@@ -16,7 +16,8 @@ import {
   type TolerableCode,
 } from '../src/index.js';
 
-export const VECTORS_DIR = fileURLToPath(new URL('../vectors/', import.meta.url));
+/** The vectors: the submodule, or another checkout given by APRS_VECTORS (with a trailing /). */
+export const VECTORS_DIR = process.env.APRS_VECTORS ?? fileURLToPath(new URL('../vectors/', import.meta.url));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Case = Record<string, any>;

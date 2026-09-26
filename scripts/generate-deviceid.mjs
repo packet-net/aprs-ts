@@ -11,7 +11,11 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parse } from 'yaml';
 
-const source = resolve(process.argv[2] ?? '../M0LTE.Aprs/.research/aprs-deviceid');
+if (!process.argv[2]) {
+  console.error('usage: node scripts/generate-deviceid.mjs <path to an aprs-deviceid checkout>');
+  process.exit(2);
+}
+const source = resolve(process.argv[2]);
 const doc = parse(readFileSync(join(source, 'tocalls.yaml'), 'utf8'));
 const git = (...args) => execFileSync('git', ['-C', source, ...args], { encoding: 'utf8' }).trim();
 const commit = git('rev-parse', 'HEAD');

@@ -37,6 +37,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
+    "test:vectors": "vitest run test/vectors.test.ts",
     "test:watch": "vitest",
     "generate:deviceid": "node scripts/generate-deviceid.mjs",
     "generate:symbols": "node scripts/generate-symbols.mjs",

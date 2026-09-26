@@ -66,7 +66,7 @@ function uncompressedPosition(
   if (!(f.longitude >= -180 && f.longitude <= 180)) refuse(`longitude ${f.longitude} is out of range`);
   const ambiguity = f.ambiguity ?? 0;
   if (!Number.isInteger(ambiguity) || ambiguity < 0 || ambiguity > 4) refuse('ambiguity is 0-4 digits');
-  checkSymbol(f.symbol, false);
+  checkSymbol(f.symbol);
   const lat = digitsOf(f.latitude, truncate || ambiguity > 0);
   const lon = digitsOf(f.longitude, truncate || ambiguity > 0);
   if (lat.degrees > 90 || (lat.degrees === 90 && lat.hundredths > 0)) refuse('latitude is out of range');
@@ -99,7 +99,7 @@ function compressedPosition(f: PositionedFields, cs: string | undefined, compres
   if (!(f.latitude >= -90 && f.latitude <= 90)) refuse(`latitude ${f.latitude} is out of range`);
   if (!(f.longitude >= -180 && f.longitude <= 180)) refuse(`longitude ${f.longitude} is out of range`);
   if ((f.ambiguity ?? 0) !== 0) refuse('a compressed position cannot be ambiguous');
-  checkSymbol(f.symbol, true);
+  checkSymbol(f.symbol);
   let table = f.symbol.table;
   if (table >= '0' && table <= '9') table = String.fromCharCode(table.charCodeAt(0) + 49); // 0-9 -> a-j
   const max = 91 ** 4 - 1;
@@ -569,7 +569,7 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   if (d.compressed || d.compression) refuse('a Mic-E report is not compressed');
   if (!(d.latitude >= -90 && d.latitude <= 90)) refuse(`latitude ${d.latitude} is out of range`);
   if (!(d.longitude >= -180 && d.longitude <= 180)) refuse(`longitude ${d.longitude} is out of range`);
-  checkSymbol(d.symbol, false);
+  checkSymbol(d.symbol);
   if (d.weather) refuse('a Mic-E report has no weather data');
   if (d.dfBearing || d.storm || d.area || d.signpost !== undefined) refuse('a Mic-E report cannot carry that data');
   const ambiguity = d.ambiguity ?? 0;

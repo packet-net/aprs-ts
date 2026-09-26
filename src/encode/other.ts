@@ -142,7 +142,7 @@ export function encodeStatus(d: StatusReport): string {
   if (d.locator !== undefined) {
     if (!/^[A-R]{2}[0-9]{2}(?:[A-X]{2})?$/.test(d.locator)) refuse('the locator is 4 or 6 characters, upper case');
     if (!d.symbol) refuse('a status locator is followed by a symbol');
-    checkSymbol(d.symbol, false);
+    checkSymbol(d.symbol);
     out += d.locator + d.symbol.table + d.symbol.code;
     if (text.length > 0 || d.beam) out += ' ';
   } else if (d.symbol) {

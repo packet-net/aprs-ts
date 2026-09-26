@@ -1,8 +1,7 @@
 // The information field decoder: picks the format by the data type identifier.
 
 import { binaryToBytes, bytesToBinary } from '../bytes.js';
-import type { Diagnostic } from '../diagnostics.js';
-import { diagnostic, type ParseOptions } from '../diagnostics.js';
+import type { Diagnostic, ParseOptions } from '../diagnostics.js';
 import { findQConstruct, parseHeaderText } from '../header.js';
 import type { AprsData, AprsPacket, ThirdParty } from '../types.js';
 import { DecodeContext, Rejected } from './context.js';
@@ -134,4 +133,3 @@ function decodeThirdParty(ctx: DecodeContext, s: string, options: ParseOptions):
   return { type: 'third-party', packet };
 }
 
-export { diagnostic };
