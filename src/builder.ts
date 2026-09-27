@@ -13,6 +13,7 @@
 // `build()` encodes the packet, so anything the spec does not allow is refused there, with an
 // `AprsEncodeError` that says why.
 
+import { nearest } from './encode/common.js';
 import { encodeInformation, encodeAx25, encodeTnc2, encodeTnc2Bytes, wrapKiss, type PacketToEncode } from './encode/index.js';
 import { symbolOf } from './symbols.js';
 import type {
@@ -262,15 +263,21 @@ abstract class PositionedBuilder<Self> {
     return this.self();
   }
 
+  /** Speed, km/h (sent in knots, 1.852 km/h each). */
+  speedKmh(kmh: number): Self {
+    this.fields.speedKnots = kmh / 1.852;
+    return this.self();
+  }
+
   /** Altitude, feet. */
   altitude(feet: number): Self {
     this.fields.altitudeFeet = feet;
     return this.self();
   }
 
-  /** Altitude, metres (sent in feet, rounded). */
+  /** Altitude, metres (sent in feet, rounded to the nearest, halves away from zero). */
   altitudeMetres(metres: number): Self {
-    this.fields.altitudeFeet = Math.round(metres / 0.3048);
+    this.fields.altitudeFeet = nearest(metres / 0.3048);
     return this.self();
   }
 
