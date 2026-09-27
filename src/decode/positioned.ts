@@ -858,8 +858,10 @@ function parseWeatherFields(ctx: DecodeContext, s: string, j: number, options: W
           j += 4;
           continue;
         }
+        // Only a run of dots may be shorter than three, and only when no digit follows it: s..6 is
+        // not a field, so the fields end there.
         const dots = /^\.{1,3}/.exec(v)?.[0];
-        if (dots === undefined) break;
+        if (dots === undefined || (dots.length < 3 && isDigit(v[dots.length]))) break;
         if (dots.length !== 3) defects.push('non-standard-weather-field-width');
         seen.add(key);
         j += 1 + dots.length;
