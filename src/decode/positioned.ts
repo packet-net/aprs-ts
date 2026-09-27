@@ -188,7 +188,8 @@ export function parseUncompressed(ctx: DecodeContext, s: string, i: number): Raw
   const lonDegrees = Number(lon.substr(0, 3));
   const lonMinutes = ambiguousMinutes(lon[3]!, lon[4]!, lon[6]!, lon[7]!, latAmbiguity);
   const rawLonMinutes = ambiguousMinutes(lon[3]!, lon[4]!, lon[6]!, lon[7]!, 0);
-  if (rawLonMinutes >= 60 || lonDegrees > 180 || (lonDegrees === 180 && rawLonMinutes > 0)) ctx.fail('invalid-longitude');
+  // As for the latitude, the centre of an ambiguous 180 degrees is past 180.
+  if (rawLonMinutes >= 60 || lonDegrees > 180 || (lonDegrees === 180 && (rawLonMinutes > 0 || lonMinutes > 0))) ctx.fail('invalid-longitude');
   let ew = lon[8]!;
   if (ew === 'e' || ew === 'w') {
     ctx.tolerate('lowercase-hemisphere');
