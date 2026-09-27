@@ -58,7 +58,8 @@ function isCompressedTable(c: string | undefined): boolean {
   return c === '/' || c === '\\' || (c !== undefined && ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'j')));
 }
 
-export const KNOTS_TO_MPH = 1.150779448;
+/** Knots to mph, exactly: a nautical mile is 1852 m and a statute mile 1609.344 m. */
+export const KNOTS_TO_MPH = 1852 / 1609.344;
 export const METRES_PER_FOOT = 0.3048;
 
 // ---- timestamps
