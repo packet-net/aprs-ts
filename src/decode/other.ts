@@ -211,9 +211,12 @@ function nmeaTime(value: string | undefined): string | undefined {
   return t;
 }
 
-/** An optional `-`, then digits with an optional `.` and fraction. */
+/**
+ * An optional `-`, then digits with an optional `.` and fraction. NMEA 0183 makes leading zeros
+ * optional, so a number may start with its decimal point (`.30`).
+ */
 function nmeaNumber(value: string | undefined): number | undefined {
-  if (value === undefined || !/^-?[0-9]+(?:\.[0-9]*)?$/.test(value)) return undefined;
+  if (value === undefined || !/^-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$/.test(value)) return undefined;
   return Number(value);
 }
 

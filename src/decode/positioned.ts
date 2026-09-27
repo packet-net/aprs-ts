@@ -162,7 +162,9 @@ export function parseUncompressed(ctx: DecodeContext, s: string, i: number): Raw
   const latDegrees = Number(lat.substr(0, 2));
   const latMinutes = ambiguousMinutes(lat[2]!, lat[3]!, lat[5]!, lat[6]!, latAmbiguity);
   const rawLatMinutes = ambiguousMinutes(lat[2]!, lat[3]!, lat[5]!, lat[6]!, 0);
-  if (rawLatMinutes >= 60 || latDegrees > 90 || (latDegrees === 90 && rawLatMinutes > 0)) ctx.fail('invalid-latitude');
+  // The latitude it reports is the centre of its ambiguity box, so 90 degrees with blanked
+  // minutes (centred on 90 degrees 30 minutes) is past the pole.
+  if (rawLatMinutes >= 60 || latDegrees > 90 || (latDegrees === 90 && (rawLatMinutes > 0 || latMinutes > 0))) ctx.fail('invalid-latitude');
   let ns = lat[7]!;
   if (ns === 'n' || ns === 's') {
     ctx.tolerate('lowercase-hemisphere');
@@ -844,18 +846,21 @@ function parseWeatherFields(ctx: DecodeContext, s: string, j: number, options: W
       if (seen.has(key)) break;
       if (letter === 'c' && windKnown) break;
       if (key === 's:snow') {
+        // Snowfall is three characters, which may include one decimal point ("A decimal point
+        // is allowed for non-integer values", APRS12c ch. 12), so s.50 is 0.5 inches. Otherwise
+        // a run of dots, read up to the field's width, is an unknown snowfall.
         const v = s.slice(j + 1, j + 4);
-        const dots = /^\.+/.exec(s.slice(j + 1))?.[0];
-        if (dots !== undefined) {
-          if (dots.length !== 3) defects.push('non-standard-weather-field-width');
+        if (/^[0-9.]{3}$/.test(v) && /[0-9]/.test(v) && !/\..*\./.test(v)) {
+          w.snow24hIn = Number(v);
           seen.add(key);
-          j += 1 + dots.length;
+          j += 4;
           continue;
         }
-        if (!/^[0-9.]{3}$/.test(v) || !/[0-9]/.test(v)) break;
-        w.snow24hIn = Number(v);
+        const dots = /^\.{1,3}/.exec(v)?.[0];
+        if (dots === undefined) break;
+        if (dots.length !== 3) defects.push('non-standard-weather-field-width');
         seen.add(key);
-        j += 4;
+        j += 1 + dots.length;
         continue;
       }
       let run = weatherValueRun(s, j + 1, width, letter === 't');
@@ -1053,12 +1058,17 @@ function decodeExtensionAndComment(ctx: DecodeContext, s: string, i: number, pos
       if (pos.symbol.table === '/' && pos.symbol.code === '\\') {
         const df = /^\/([0-9]{3})\/([0-9])([0-9])([0-9])/.exec(s.slice(i, i + 8));
         if (df) {
-          f.dfBearing = {
-            bearingDegrees: Number(df[1]),
-            number: Number(df[2]),
-            range: Number(df[3]),
-            quality: Number(df[4]),
-          };
+          // The bearing is degrees: one over 360 drops the whole /BRG/NRQ, as a course over 360 is dropped.
+          if (Number(df[1]) > 360) {
+            ctx.tolerate('out-of-range-value');
+          } else {
+            f.dfBearing = {
+              bearingDegrees: Number(df[1]),
+              number: Number(df[2]),
+              range: Number(df[3]),
+              quality: Number(df[4]),
+            };
+          }
           i += 8;
         }
       }

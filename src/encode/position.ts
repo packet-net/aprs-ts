@@ -672,6 +672,10 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
     if (d.typeCode === undefined) refuse('a Mic-E device suffix needs a type code');
     text += d.deviceSuffix;
   }
+  // Mic-E status text must not start with 0x1D, which would be taken for Rev 0 telemetry
+  // (APRS12c ch. 10), so a comment that would start it is written after a /.
+  const legacy = d.legacyTelemetry !== undefined && d.legacyTelemetry.length > 0;
+  if (!legacy && text.startsWith('\x1d') && mode !== 'delimited') return encodeMicE(d, 'delimited');
   info += text;
   return { text: info, destination };
 }
