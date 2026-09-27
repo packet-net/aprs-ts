@@ -244,6 +244,22 @@ function weatherValue(v: number | undefined, width: number, min: number, max: nu
   return pad(n, width);
 }
 
+/**
+ * Snowfall written exactly in its three characters, with a decimal point where it needs one
+ * (0.32 as `.32`), and refused when they cannot hold it.
+ */
+function snowfallText(inches: number): string {
+  if (!Number.isFinite(inches) || inches < 0) refuse('snowfall is not a number of inches');
+  let text: string;
+  if (Number.isInteger(inches)) text = pad(whole(inches, 0, 999, 'snowfall'), 3);
+  else if (String(inches).length === 3) text = String(inches);
+  else text = inches < 1 ? '.' + pad(Math.round(inches * 100), 2) : '';
+  if (!/^[0-9.]{3}$/.test(text) || /\..*\./.test(text) || Math.abs(Number(text) - inches) > 1e-9) {
+    refuse(`snowfall ${inches} does not fit in 3 characters`);
+  }
+  return text;
+}
+
 /** Weather fields after the wind: gust, temperature, rain, humidity, pressure, and on. */
 function weatherFields(w: Weather, mandatory: boolean): string {
   let out = '';
@@ -261,12 +277,7 @@ function weatherFields(w: Weather, mandatory: boolean): string {
     const l = whole(w.luminosityWM2, 0, 1999, 'luminosity');
     out += l < 1000 ? 'L' + pad(l, 3) : 'l' + pad(l - 1000, 3);
   }
-  if (w.snow24hIn !== undefined) {
-    const s = w.snow24hIn;
-    let text = Number.isInteger(s) ? pad(whole(s, 0, 999, 'snowfall'), 3) : String(s);
-    if (text.length !== 3 || !/^[0-9.]{3}$/.test(text)) text = refuse('snowfall is 3 characters');
-    out += 's' + text;
-  }
+  if (w.snow24hIn !== undefined) out += 's' + snowfallText(w.snow24hIn);
   if (w.rainRaw !== undefined) out += '#' + pad(whole(w.rainRaw, 0, 999, 'raw rain counter'), 3);
   for (const e of w.extra ?? []) {
     if (!/^[A-Za-z]$/.test(e.letter) || 'csgtrpPhbLl'.includes(e.letter)) refuse(`${e.letter} is not an extra weather field letter`);
@@ -409,7 +420,8 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
   if (f.frequency) text += (extensionEnded && !out.endsWith('/') ? '/' : '') + frequencyText(f.frequency);
   let braces = '';
   if (f.signpost !== undefined) {
-    if (!/^[\x21-\x7c\x7e]{1,3}$/.test(f.signpost) || f.signpost.includes('{') || f.signpost.includes('}')) refuse('a signpost is 1-3 printable characters');
+    // Printable ASCII, a space included, other than the braces around it.
+    if (!/^[\x20-\x7a\x7c\x7e]{1,3}$/.test(f.signpost)) refuse('a signpost is 1-3 printable ASCII characters other than { and }');
     braces = `{${f.signpost}}`;
   }
   if (f.area?.corridorWidthMiles !== undefined) {
