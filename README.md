@@ -174,7 +174,7 @@ console.log(identifyTocall('APDW18')?.model); // DireWolf
 
 ## Conformance
 
-The conformance vectors are a git submodule at `vectors/`. The test suite runs every case with every check the vectors' README defines (the lenient result, the strict result, the single-tolerance check, re-encoding, and the encode cases), one test per check per case: 6,002 tests, all passing. A check this implementation could not pass would be listed in `test/known-differences.json` with the reason and skipped; the list is empty.
+The conformance vectors are a git submodule at `vectors/`. The test suite runs every case with every check the vectors' README defines (the lenient result, the strict result, the single-tolerance check, re-encoding, and the encode cases), one test per check per case: 6,007 tests, all passing. A check this implementation could not pass would be listed in `test/known-differences.json` with the reason and skipped; the list is empty.
 
 `scripts/diff-dump.mjs` writes the differential dump that the vectors' `tools/compare.py` reads, for comparing implementations over a whole capture:
 

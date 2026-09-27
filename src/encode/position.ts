@@ -325,9 +325,11 @@ function hasExtension(f: PositionedFields): string[] {
 /**
  * How the comment is joined on: `plain` (after a space when it follows a frequency), `joined`
  * (straight after a frequency, with no space) or `delimited` (after a `/`), for when it would
- * otherwise read as something else.
+ * otherwise read as something else; or `braces-first`, as `plain` but with the signpost or
+ * corridor braces written before the comment, for a comment holding braces that would be taken
+ * for them (the first well-formed braces are the signpost).
  */
-export type CommentMode = 'plain' | 'joined' | 'delimited';
+export type CommentMode = 'plain' | 'joined' | 'delimited' | 'braces-first';
 
 /** Encodes a position and what follows it. */
 function positionedBody(f: PositionedFields, mode: CommentMode): Body {
@@ -433,7 +435,7 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
     if (text.length > 0 && mode !== 'joined') text += ' ';
     text += (mode === 'delimited' ? '/' : '') + freeText(comment, 'the comment');
   }
-  text += braces;
+  text = mode === 'braces-first' ? braces + text : text + braces;
   if (f.telemetry) text += telemetryText(f.telemetry);
   if (f.dao) text += daoText(f, latRem, lonRem, daoApplied);
   const body: Body = { text: out + text };

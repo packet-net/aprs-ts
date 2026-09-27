@@ -1,7 +1,7 @@
 // The encoder: writes only what the spec allows and refuses anything else with a reason. Free
 // text is checked by decoding what was written: if the result does not read back as the same
-// data (a comment that would read as an altitude, say), a `/` delimiter is tried, and if that
-// does not help either the encoder refuses.
+// data (a comment that would read as an altitude, say), a `/` delimiter is tried, then the
+// signpost or corridor braces before the comment, and if none of that helps the encoder refuses.
 
 import { binaryToBytes, bytesToBinary, decodeUtf8 } from '../bytes.js';
 import { decodeInformation } from '../decode/index.js';
@@ -192,8 +192,9 @@ export function encodeInformation(data: AprsData): EncodedInformation {
   let problems = check(data, first);
   let chosen = first;
   if (problems.length > 0 && typeof (data as { comment?: unknown }).comment === 'string') {
-    // The comment would read as something else: try it straight after a frequency, then after a /.
-    for (const mode of ['joined', 'delimited'] as const) {
+    // The comment would read as something else: try it straight after a frequency, then after a /,
+    // then after the signpost or corridor braces.
+    for (const mode of ['joined', 'delimited', 'braces-first'] as const) {
       let next: Attempt | undefined;
       try {
         next = attempt(data, mode);
