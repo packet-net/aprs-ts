@@ -114,7 +114,7 @@ function decodeThirdParty(ctx: DecodeContext, s: string, options: ParseOptions):
   const headerDiags: Diagnostic[] = [];
   let header: ReturnType<typeof parseHeaderText>;
   try {
-    header = parseHeaderText(body.slice(0, colon), options, headerDiags);
+    header = parseHeaderText(body.slice(0, colon), options, headerDiags, true);
   } catch {
     return ctx.fail('invalid-third-party');
   }

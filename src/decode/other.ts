@@ -55,7 +55,8 @@ export function decodeStatus(ctx: DecodeContext, s: string): StatusReport {
       }
     }
   }
-  const beam = /\^([0-9A-Z])([0-9:;<=>?@A-K])$/.exec(body);
+  // The ERP codes run 1-9, : to @, then A-K; there is no 0 (APRS12c ch. 16).
+  const beam = /\^([0-9A-Z])([1-9:;<=>?@A-K])$/.exec(body);
   if (beam) {
     out.beam = { headingCode: beam[1]!, powerCode: beam[2]! };
     body = body.slice(0, beam.index);
@@ -137,12 +138,29 @@ export function decodeQuery(ctx: DecodeContext, s: string): Query {
   const out: { -readonly [K in keyof Query]: Query[K] } = { type: 'query', queryType: m[1]! };
   const rest = m[2]!;
   if (rest.length > 0) {
-    const f = /^ ?(-?[0-9]+(?:\.[0-9]*)?),(-?[0-9]+(?:\.[0-9]*)?),([0-9]{4})$/.exec(rest);
+    // Decimal degrees, a positive value with or without a leading space, and a 4-digit radius.
+    const f = /^( ?[0-9]+(?:\.[0-9]*)?|-[0-9]+(?:\.[0-9]*)?),( ?[0-9]+(?:\.[0-9]*)?|-[0-9]+(?:\.[0-9]*)?),([0-9]{4})$/.exec(rest);
     if (!f) ctx.fail('invalid-general-query');
-    out.footprint = { latitude: Number(f[1]), longitude: Number(f[2]), radiusMiles: Number(f[3]) };
+    const latitude = Number(f[1]);
+    const longitude = Number(f[2]);
+    // A footprint is a real place (vectors interpretations.md).
+    if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) ctx.fail('invalid-general-query');
+    out.footprint = { latitude, longitude, radiusMiles: Number(f[3]) };
   }
   return out;
 }
+
+/** Drops U+0020 spaces, and no other character, from both ends. */
+function trimSpaces(text: string): string {
+  let a = 0;
+  let b = text.length;
+  while (a < b && text[a] === ' ') a++;
+  while (b > a && text[b - 1] === ' ') b--;
+  return text.slice(a, b);
+}
+
+/** A control character: below U+0020, or U+007F. */
+const CONTROL_RE = /[\x00-\x1f\x7f]/;
 
 /** `<`: station capabilities. */
 export function decodeCapabilities(ctx: DecodeContext, s: string): Capabilities {
@@ -150,85 +168,130 @@ export function decodeCapabilities(ctx: DecodeContext, s: string): Capabilities 
   const capabilities: Capability[] = [];
   let freeText = false;
   for (const raw of text.split(',')) {
-    const item = raw.trim();
+    // Spaces around an item, a token or a value are padding; nothing else is (vectors
+    // interpretations.md, "Station capabilities: items, tokens and values").
+    const item = trimSpaces(raw);
     if (item.length === 0) continue; // empty items are skipped
     const eq = item.indexOf('=');
-    const token = eq < 0 ? item : item.slice(0, eq);
-    if (/\s/.test(token) || token.length === 0) freeText = true;
-    capabilities.push(eq < 0 ? [item] : [token, item.slice(eq + 1)]);
+    const token = eq < 0 ? item : trimSpaces(item.slice(0, eq));
+    const value = eq < 0 ? undefined : trimSpaces(item.slice(eq + 1));
+    if (token.length === 0 || token.includes(' ') || CONTROL_RE.test(token)) freeText = true;
+    if (value !== undefined && CONTROL_RE.test(value)) freeText = true;
+    capabilities.push(value === undefined ? [token] : [token, value]);
   }
   if (capabilities.length === 0) ctx.fail('invalid-capabilities');
   if (freeText) ctx.tolerate('free-text-capabilities');
   return { type: 'capabilities', capabilities };
 }
 
-function nmeaDegrees(value: string | undefined, hemisphere: string | undefined, width: number): number | undefined {
+/** A coordinate: at least three digits before an optional `.` and fraction, the last two minutes. */
+function nmeaDegrees(value: string | undefined, hemisphere: string | undefined, limit: number): number | undefined {
   if (value === undefined || hemisphere === undefined) return undefined;
-  if (!/^[0-9]+(?:\.[0-9]*)?$/.test(value)) return undefined;
-  const dot = value.indexOf('.');
-  const intPart = dot < 0 ? value : value.slice(0, dot);
-  if (intPart.length < 3) return undefined;
-  const degrees = Number(intPart.slice(0, intPart.length - 2));
-  const minutes = Number(value.slice(intPart.length - 2));
+  const m = /^([0-9]+)([0-9]{2}(?:\.[0-9]*)?)$/.exec(value);
+  if (!m) return undefined;
+  const degrees = Number(m[1]);
+  const minutes = Number(m[2]);
   if (minutes >= 60) return undefined;
   const v = degrees + minutes / 60;
-  if (v > width) return undefined;
-  if (hemisphere === 'S' || hemisphere === 'W') return v === 0 ? 0 : -v;
-  if (hemisphere === 'N' || hemisphere === 'E') return v;
+  if (v > limit) return undefined;
+  if (hemisphere === (limit === 90 ? 'S' : 'W')) return v === 0 ? 0 : -v;
+  if (hemisphere === (limit === 90 ? 'N' : 'E')) return v;
   return undefined;
 }
 
+/** `hhmmss` with an optional fraction, as `HH:MM:SS` and the fraction as sent, less trailing zeros. */
 function nmeaTime(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const m = /^([0-9]{2})([0-9]{2})([0-9]{2})(?:\.([0-9]*))?$/.exec(value);
   if (!m) return undefined;
+  if (Number(m[1]) > 23 || Number(m[2]) > 59 || Number(m[3]) > 59) return undefined;
   let t = `${m[1]}:${m[2]}:${m[3]}`;
   const fraction = (m[4] ?? '').replace(/0+$/, '');
   if (fraction.length > 0) t += `.${fraction}`;
   return t;
 }
 
+/** An optional `-`, then digits with an optional `.` and fraction. */
 function nmeaNumber(value: string | undefined): number | undefined {
-  if (value === undefined || !/^-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)$/.test(value)) return undefined;
+  if (value === undefined || !/^-?[0-9]+(?:\.[0-9]*)?$/.test(value)) return undefined;
   return Number(value);
 }
 
-/** Verifies an NMEA sentence's checksum; `undefined` when it has none. */
-export function nmeaChecksumOk(sentence: string): boolean | undefined {
-  const m = /\*([0-9A-Fa-f]{2})$/.exec(sentence);
-  if (!m) return undefined;
-  let x = 0;
-  for (let k = 0; k < m.index; k++) x ^= sentence.charCodeAt(k);
-  return x === parseInt(m[1]!, 16);
+const NMEA_ADDRESS_RE = /^(?:[A-Z0-9]{5}|P[A-Z0-9]{3,})$/;
+
+/** An NMEA 0183 sentence taken apart. */
+export interface NmeaParts {
+  /** The sentence, up to and including any `*hh` checksum. */
+  sentence: string;
+  /** The comma-separated fields before any checksum, the address field first. */
+  fields: string[];
+  /** Whether the sentence has a checksum. */
+  hasChecksum: boolean;
+  /** Whether the checksum matches; true when there is none. */
+  checksumOk: boolean;
+  /** Whatever follows the checksum. */
+  rest: string;
+}
+
+/**
+ * Takes the text after `$` apart as an NMEA 0183 sentence (vectors interpretations.md, "What $
+ * text is an NMEA sentence"): printable ASCII, an address field of five upper-case letters or
+ * digits (or `P` and three or more), at least one field, no `$`, and no `*` but the one that
+ * starts a checksum of two hex digits, which ends the sentence. `undefined` when it is not one.
+ */
+export function splitNmea(text: string): NmeaParts | undefined {
+  const star = text.indexOf('*');
+  const hasChecksum = star >= 0;
+  if (hasChecksum && !/^[0-9A-Fa-f]{2}$/.test(text.slice(star + 1, star + 3))) return undefined;
+  const body = hasChecksum ? text.slice(0, star) : text;
+  if (!/^[\x20-\x7e]*$/.test(body) || body.includes('$')) return undefined;
+  const fields = body.split(',');
+  if (fields.length < 2 || !NMEA_ADDRESS_RE.test(fields[0]!)) return undefined;
+  const end = hasChecksum ? star + 3 : text.length;
+  let checksumOk = true;
+  if (hasChecksum) {
+    let x = 0;
+    for (let k = 0; k < body.length; k++) x ^= body.charCodeAt(k);
+    checksumOk = x === parseInt(text.slice(star + 1, star + 3), 16);
+  }
+  return { sentence: text.slice(0, end), fields, hasChecksum, checksumOk, rest: text.slice(end) };
 }
 
 /** `$`: raw NMEA, or Ultimeter raw weather (`$ULTW`). */
 export function decodeDollar(ctx: DecodeContext, s: string): NmeaSentence | RawWeather {
   if (s.startsWith('$ULTW')) return decodeRawWeather(ctx, s.slice(5), 'ultimeter-packet');
   ctx.info('obsolete-format');
-  const sentence = s.slice(1);
-  if (!/^[A-Z]{5},[\x20-\x7e]*$/.test(sentence)) ctx.fail('invalid-nmea');
-  const checksum = nmeaChecksumOk(sentence);
-  if (checksum === false) ctx.fail('nmea-checksum-mismatch');
-  const body = checksum === undefined ? sentence : sentence.slice(0, sentence.length - 3);
-  const f = body.split(',');
-  const out: { -readonly [K in keyof NmeaSentence]: NmeaSentence[K] } = { type: 'nmea', sentence };
-  if (checksum !== undefined) out.hasChecksum = true;
+  // The structure is checked before the checksum.
+  const parts = splitNmea(s.slice(1));
+  if (!parts) return ctx.fail('invalid-nmea');
+  if (!parts.checksumOk) ctx.fail('nmea-checksum-mismatch');
+  const f = parts.fields;
+  const out: { -readonly [K in keyof NmeaSentence]: NmeaSentence[K] } = { type: 'nmea', sentence: parts.sentence };
+  if (parts.hasChecksum) out.hasChecksum = true;
   const set = <K extends keyof NmeaSentence>(key: K, value: NmeaSentence[K] | undefined): void => {
     if (value !== undefined) out[key] = value;
   };
-  switch (f[0]!.slice(2)) {
+  // A position needs both coordinates.
+  const position = (lat: number, lon: number): void => {
+    const latitude = nmeaDegrees(f[lat], f[lat + 1], 90);
+    const longitude = nmeaDegrees(f[lon], f[lon + 1], 180);
+    if (latitude === undefined || longitude === undefined) return;
+    out.latitude = latitude;
+    out.longitude = longitude;
+  };
+  // Only an approved address (five characters, not P) has a sentence formatter.
+  const address = f[0]!;
+  const formatter = address.length === 5 && address[0] !== 'P' ? address.slice(2) : '';
+  switch (formatter) {
     case 'GGA': {
-      set('latitude', nmeaDegrees(f[2], f[3], 90));
-      set('longitude', nmeaDegrees(f[4], f[5], 180));
+      position(2, 4);
       if (f[6] !== undefined && /^[0-9]$/.test(f[6])) out.fix = f[6] === '0' ? 'invalid' : 'valid';
       set('altitudeM', nmeaNumber(f[9]));
       set('time', nmeaTime(f[1]));
       break;
     }
     case 'GLL': {
-      set('latitude', nmeaDegrees(f[1], f[2], 90));
-      set('longitude', nmeaDegrees(f[3], f[4], 180));
+      position(1, 3);
       set('time', nmeaTime(f[5]));
       if (f[6] === 'A') out.fix = 'valid';
       else if (f[6] === 'V') out.fix = 'invalid';
@@ -238,8 +301,7 @@ export function decodeDollar(ctx: DecodeContext, s: string): NmeaSentence | RawW
       set('time', nmeaTime(f[1]));
       if (f[2] === 'A') out.fix = 'valid';
       else if (f[2] === 'V') out.fix = 'invalid';
-      set('latitude', nmeaDegrees(f[3], f[4], 90));
-      set('longitude', nmeaDegrees(f[5], f[6], 180));
+      position(3, 5);
       set('speedKnots', nmeaNumber(f[7]));
       set('courseDegrees', nmeaNumber(f[8]));
       break;
@@ -250,12 +312,13 @@ export function decodeDollar(ctx: DecodeContext, s: string): NmeaSentence | RawW
       break;
     }
     case 'WPL': {
-      set('latitude', nmeaDegrees(f[1], f[2], 90));
-      set('longitude', nmeaDegrees(f[3], f[4], 180));
+      position(1, 3);
       if (f[5] !== undefined && f[5].length > 0) out.waypoint = f[5];
       break;
     }
   }
+  // Text after the checksum is a comment, kept as sent.
+  if (parts.rest.length > 0) out.comment = ctx.text(parts.rest);
   return out;
 }
 
@@ -287,8 +350,9 @@ export function decodeTest(ctx: DecodeContext, s: string): TestData {
 
 /** `%`: an Agrelo DFJr / MicroFinder report. */
 export function decodeAgrelo(ctx: DecodeContext, s: string): AgreloDf {
-  const m = /^%([0-9]{3})\/([0-9])/.exec(s);
-  if (!m) ctx.fail('invalid-agrelo-df');
+  // Exactly %, a bearing of 000 to 360, / and a quality digit (vectors interpretations.md).
+  const m = /^%([0-9]{3})\/([0-9])$/.exec(s);
+  if (!m || Number(m[1]) > 360) return ctx.fail('invalid-agrelo-df');
   return { type: 'agrelo-df', bearingDegrees: Number(m[1]), quality: Number(m[2]) };
 }
 

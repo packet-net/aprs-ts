@@ -186,3 +186,42 @@ describe('options and diagnostics', () => {
     expect(decodeAx25(frame).path).toEqual([{ address: 'WIDE1-1', used: false }]);
   });
 });
+
+describe('raw NMEA', () => {
+  const rmc = 'GPRMC,204717,A,3242.4549,N,08527.2835,W,000,340,090207,,*0C';
+
+  it('reads the text after the checksum as a comment, and writes it back', () => {
+    const packet = decodeTnc2(`WB4BYQ-3>APT311:$${rmc}/Home Station by TinyTrack`);
+    expect(packet.data).toMatchObject({ type: 'nmea', sentence: rmc, hasChecksum: true, comment: '/Home Station by TinyTrack' });
+    expect(decodeUtf8(encodeInformation(packet.data).info)).toBe(`$${rmc}/Home Station by TinyTrack`);
+  });
+
+  it('refuses a comment with no checksum to end the sentence, and fields the sentence does not say', () => {
+    const noChecksum = { type: 'nmea', sentence: 'GPGLL,2554.459,N,08020.187,W,154027.281,A', comment: 'x' } as const;
+    expect(() => encodeInformation(noChecksum)).toThrow(AprsEncodeError);
+    const wrongLatitude = { type: 'nmea', sentence: rmc, hasChecksum: true, latitude: 10, longitude: -85.454725 } as const;
+    expect(() => encodeInformation(wrongLatitude)).toThrow(AprsEncodeError);
+  });
+});
+
+describe('encoder refusals no conformance case pins', () => {
+  it('refuses a capability that would not read back the same', () => {
+    expect(() => encodeInformation({ type: 'capabilities', capabilities: [['IG ATE']] })).toThrow(AprsEncodeError);
+    expect(() => encodeInformation({ type: 'capabilities', capabilities: [['IGATE', '43 ']] })).toThrow(AprsEncodeError);
+    expect(decodeUtf8(encodeInformation({ type: 'capabilities', capabilities: [['IGATE', '4 3']] }).info)).toBe('<IGATE=4 3');
+  });
+
+  it('pads an APRSH target to 9 characters and writes a target after an undefined type after a space', () => {
+    const aprsh = { type: 'directed-query', addressee: 'KH2Z', queryType: 'APRSH', target: 'N0QBF' } as const;
+    expect(decodeUtf8(encodeInformation(aprsh).info)).toBe(':KH2Z     :?APRSHN0QBF    ');
+    const other = { ...aprsh, queryType: 'FOO' };
+    expect(decodeUtf8(encodeInformation(other).info)).toBe(':KH2Z     :?FOO N0QBF');
+  });
+
+  it('refuses an ERP code of 0 and a third-party inner packet whose header was defective', () => {
+    const status = { type: 'status', text: 'Net', beam: { headingCode: 'B', powerCode: '0' } } as const;
+    expect(() => encodeInformation(status)).toThrow(AprsEncodeError);
+    const inner = decodeTnc2('N0CALL>APZ001:}N0CALL>APZ,WIDE1-1*,WIDE2-1*:>x');
+    expect(() => encodeInformation(inner.data)).toThrow(AprsEncodeError);
+  });
+});

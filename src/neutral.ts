@@ -281,6 +281,7 @@ export function toNeutralData(d: AprsData): Neutral {
       put(o, 'altitude_m', d.altitudeM);
       put(o, 'time', d.time);
       put(o, 'waypoint', d.waypoint);
+      put(o, 'comment', d.comment);
       break;
     case 'maidenhead-beacon':
       put(o, 'locator', d.locator);
@@ -560,6 +561,7 @@ export function fromNeutralData(d: J): AprsData {
       opt(o, 'altitudeM', d.altitude_m);
       opt(o, 'time', d.time);
       opt(o, 'waypoint', d.waypoint);
+      opt(o, 'comment', d.comment);
       break;
     case 'maidenhead-beacon':
       o.locator = d.locator ?? '';

@@ -16,6 +16,7 @@ import {
   applyLiftedTo,
   base91Value,
   decodeAfterPosition,
+  extensionAt,
   isDigit,
   isSymbolTable,
   liftMicEComment,
@@ -25,6 +26,7 @@ import {
   positionDecodesAt,
   timestampAt,
   timestampValid,
+  type ExtensionFound,
   type Fields,
   type RawPosition,
 } from './positioned.js';
@@ -254,6 +256,8 @@ const TYPE_CODES = '`\'>] ';
 
 /** `` ` ``, `'`, 0x1c, 0x1d: a Mic-E report. */
 export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
+  // The Rev 0 beta data type identifiers are obsolete: said at the DTI, before anything is checked.
+  if (s[0] === '\x1c' || s[0] === '\x1d') ctx.info('obsolete-format');
   const dest = decodeMicEDestination(ctx, ctx.destination);
   if (s.length < 9) ctx.fail('invalid-mic-e-information');
   const b = (k: number): number => s.charCodeAt(k);
@@ -340,15 +344,23 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     if (deviceSuffix !== undefined) text = text.slice(0, text.length - deviceSuffix.length);
   }
   let altitudeFeet: number | undefined;
+  let extension: ExtensionFound | undefined;
+  // Where a later altitude was taken out of the text: a !DAO! is never read across it.
+  let join: number | undefined;
   const altFirst = /^([!-{]{3})\}/.exec(text);
   if (altFirst) {
     altitudeFeet = (base91Value(altFirst[1]!) - 10000) / METRES_PER_FOOT;
     text = text.slice(4);
   } else {
+    // A data extension straight after the type code is read first, so its bytes are never taken
+    // for an altitude later in the text (`0PH}` in `PHG3330PH}`).
+    extension = extensionAt(text, 0);
+    if (extension) text = text.slice(extension.length);
     const later = /([!-{]{3})\}/.exec(text);
     if (later && ctx.allows('mic-e-altitude-not-first')) {
       altitudeFeet = (base91Value(later[1]!) - 10000) / METRES_PER_FOOT;
       text = text.slice(0, later.index) + text.slice(later.index + 4);
+      join = later.index;
     }
   }
   if (altitudeFeet !== undefined) f.altitudeFeet = altitudeFeet;
@@ -356,15 +368,19 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
   const loc = /^([A-Ra-r]{2}[0-9]{2}(?:[A-Xa-x]{2})?)\/G/.exec(text);
   if (loc) {
     locator = loc[1]!.toUpperCase();
+    const before = text.length;
     text = text.slice(loc[0].length);
     if (text.length > 0) {
       if (text[0] === ' ') text = text.slice(1);
       else ctx.tolerate('missing-space-after-locator');
     }
+    if (join !== undefined) join -= before - text.length;
   }
-  const { lifted } = liftMicEComment(ctx, text, pos.symbol);
-  applyLiftedTo(ctx, f, lifted);
+  const joins = join !== undefined && join > 0 ? [join] : [];
+  const { lifted } = liftMicEComment(ctx, text, pos.symbol, extension, joins);
+  // The !DAO! is structure, so it is judged before the text's encoding.
   applyDao(ctx, f, pos, lifted.dao);
+  applyLiftedTo(ctx, f, lifted);
 
   const dti = s[0]!;
   const head: {

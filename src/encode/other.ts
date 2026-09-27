@@ -2,8 +2,9 @@
 // telemetry, queries, capabilities, and the rest.
 
 import { encodeUtf8Binary } from '../bytes.js';
-import { nmeaChecksumOk } from '../decode/other.js';
-import { formatPath } from '../header.js';
+import { DIRECTED_QUERY_TYPES } from '../decode/message.js';
+import { splitNmea } from '../decode/other.js';
+import { formatPath, isAprsIsAddress } from '../header.js';
 import type {
   Ack,
   AgreloDf,
@@ -124,7 +125,10 @@ export function encodeDirectedQuery(d: DirectedQuery): string {
   let out = `:${addressee(d.addressee)}:?${d.queryType}`;
   if (d.target !== undefined) {
     if (!/^[A-Za-z0-9-]{1,9}$/.test(d.target)) refuse('a query target is one callsign');
-    out += d.target;
+    // A type the spec defines is followed straight by the target, an APRSH target padded to 9
+    // characters; any other type has no fixed length, so its target follows one space.
+    if (!DIRECTED_QUERY_TYPES.includes(d.queryType)) out += ` ${d.target}`;
+    else out += d.queryType === 'APRSH' ? d.target.padEnd(9, ' ') : d.target;
   }
   return out;
 }
@@ -150,7 +154,7 @@ export function encodeStatus(d: StatusReport): string {
   }
   out += freeText(text, 'status text');
   if (d.beam) {
-    if (!/^[0-9A-Z]$/.test(d.beam.headingCode) || !/^[0-9:;<=>?@A-K]$/.test(d.beam.powerCode))
+    if (!/^[0-9A-Z]$/.test(d.beam.headingCode) || !/^[1-9:;<=>?@A-K]$/.test(d.beam.powerCode))
       refuse('beam heading is 0-9 or A-Z, and power 1-9 or :-K');
     out += `^${d.beam.headingCode}${d.beam.powerCode}`;
   }
@@ -186,10 +190,12 @@ export function encodeRawWeather(d: RawWeather): string {
 }
 
 export function encodeNmea(d: NmeaSentence): string {
-  if (!/^[A-Z]{5},[\x20-\x7e]*$/.test(d.sentence)) refuse('not an NMEA sentence');
-  const checksum = nmeaChecksumOk(d.sentence);
-  if (checksum === false) refuse("the NMEA sentence's checksum does not match");
-  return `$${d.sentence}`;
+  const parts = splitNmea(d.sentence);
+  if (!parts || parts.rest.length > 0) refuse('not an NMEA 0183 sentence');
+  if (!parts.checksumOk) refuse("the NMEA sentence's checksum does not match");
+  const comment = d.comment ?? '';
+  if (comment.length > 0 && !parts.hasChecksum) refuse('a comment after an NMEA sentence needs the checksum that ends the sentence');
+  return `$${d.sentence}${freeText(comment, 'the comment')}`;
 }
 
 export function encodeMaidenhead(d: MaidenheadBeacon): string {
@@ -209,14 +215,20 @@ export function encodeQuery(d: Query): string {
   return out;
 }
 
+/** A control character: below U+0020, or U+007F. */
+const CONTROL_RE = /[\x00-\x1f\x7f]/;
+
 export function encodeCapabilities(d: Capabilities): string {
   if (d.capabilities.length === 0) refuse('capabilities need at least one item');
+  // Anything that would not read back the same (vectors interpretations.md, "Station
+  // capabilities: items, tokens and values") is refused.
   const items = d.capabilities.map((c) => {
     const token = c[0];
-    if (token.length === 0 || /[\s,=]/.test(token)) refuse('a capability token has no space, comma or =');
+    if (token.length === 0 || /[ ,=]/.test(token) || CONTROL_RE.test(token)) refuse('a capability token is not empty and has no space, control character, comma or =');
     if (c.length === 1) return token;
     const value = c[1]!;
-    if (value.includes(',') || /^\s|\s$/.test(value)) refuse('a capability value has no comma or edge spaces');
+    if (value.includes(',') || CONTROL_RE.test(value) || value.startsWith(' ') || value.endsWith(' '))
+      refuse('a capability value has no comma or control character, and does not start or end with a space');
     return `${token}=${value}`;
   });
   return '<' + encodeUtf8Binary(items.join(','));
@@ -241,7 +253,11 @@ export function encodeAgrelo(d: AgreloDf): string {
 /** The third-party header and the encapsulated packet's information field. */
 export function encodeThirdParty(d: ThirdParty, innerInfo: string): string {
   const p = d.packet;
+  // The source is 1-9 printable ASCII characters other than > and : (APRS12c ch. 17); the
+  // destination and path are APRS-IS addresses.
+  if (!/^[\x20-\x39\x3b-\x3d\x3f-\x7e]{1,9}$/.test(p.source)) refuse('a third-party source is 1-9 printable ASCII characters other than > and :');
+  if (!isAprsIsAddress(p.destination)) refuse('the third-party destination is not a valid address');
+  for (const e of p.path) if (!isAprsIsAddress(e.address)) refuse(`the third-party path entry ${JSON.stringify(e.address)} is not a valid address`);
   const header = p.path.length > 0 ? `${p.source}>${p.destination},${formatPath(p.path)}` : `${p.source}>${p.destination}`;
-  if (!/^[\x21-\x7e]+$/.test(header) || header.includes(':')) refuse('the third-party header is not printable');
   return `}${header}:${innerInfo}`;
 }

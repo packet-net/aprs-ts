@@ -109,6 +109,18 @@ function compressedPosition(f: PositionedFields, cs: string | undefined, compres
   return table + base91(y, 4) + base91(x, 4) + f.symbol.code + tail;
 }
 
+/**
+ * A GGA altitude in the cs bytes: 1.002^cs feet, so the nearest value they hold (1 foot for 0 feet
+ * or below), and whether that is exact. When it is not, a `/A=` altitude carries it and wins.
+ */
+function ggaAltitude(feet: number): { cs: string; exact: boolean } {
+  if (!Number.isFinite(feet)) refuse('altitude is not a number');
+  const v = feet <= 1 ? 0 : Math.round(Math.log(feet) / Math.log(1.002));
+  if (v > 91 * 91 - 1) refuse('altitude is too high for the compressed format');
+  const cs = String.fromCharCode(Math.floor(v / 91) + 33) + String.fromCharCode((v % 91) + 33);
+  return { cs, exact: Math.abs(Math.pow(1.002, v) - feet) <= 1e-9 * Math.abs(feet) };
+}
+
 // ---- data extensions and comment elements
 
 function courseSpeed(course: number | undefined, speed: number | undefined, what = 'course'): string {
@@ -191,14 +203,20 @@ export function telemetryText(t: CommentTelemetry): string {
   const v = (n: number, what: string): string => base91(whole(n, 0, 8280, what), 2);
   let out = '|' + v(t.sequence, 'telemetry sequence');
   for (const a of t.analog) out += v(a, 'telemetry value');
-  if (t.digital !== undefined) out += v(t.digital, 'telemetry bits');
+  // Eight binary channels; bits 9-13 are reserved.
+  if (t.digital !== undefined) out += base91(whole(t.digital, 0, 255, 'telemetry bits'), 2);
   return out + '|';
 }
 
 function daoText(f: PositionedFields, latRemainder: number, lonRemainder: number, applied: boolean): string {
   const dao = f.dao!;
   const datum = dao.datum;
-  if (!/^[A-Za-z]$/.test(datum)) refuse('the !DAO! datum is a letter');
+  if (/^[0-9]$/.test(datum)) {
+    // A local datum digit has no case to give a precision, so it only goes with spaces.
+    if (dao.precision !== 'none') refuse('a !DAO! datum digit carries no added precision');
+    return `!${datum}  !`;
+  }
+  if (!/^[A-Za-z]$/.test(datum)) refuse('the !DAO! datum is a letter or a digit');
   switch (dao.precision) {
     case 'none':
       return `!${datum.toUpperCase()}  !`;
@@ -342,11 +360,9 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
       cs = '{' + String.fromCharCode(s + 33);
       compression = compression ?? DEFAULT_COMPRESSION;
     } else if (f.altitudeFeet !== undefined && compression?.source === 'gga') {
-      if (f.altitudeFeet < 1) refuse('a compressed altitude is at least 1 foot');
-      const v = Math.round(Math.log(f.altitudeFeet) / Math.log(1.002));
-      if (v > 91 * 91 - 1) refuse('altitude is too high for the compressed format');
-      cs = String.fromCharCode(Math.floor(v / 91) + 33) + String.fromCharCode((v % 91) + 33);
-      altitudeInCs = Math.abs(Math.pow(1.002, v) - f.altitudeFeet) <= 1e-9 * f.altitudeFeet;
+      const alt = ggaAltitude(f.altitudeFeet);
+      cs = alt.cs;
+      altitudeInCs = alt.exact;
     } else if (compression !== undefined) {
       refuse('a compression type needs cs data (course/speed, range or altitude)');
     }
@@ -448,9 +464,9 @@ function weatherBody(f: PositionedFields): Body {
       compression = compression ?? DEFAULT_COMPRESSION;
       if (compression.source === 'gga') refuse('a GGA compression type means the cs bytes hold altitude');
     } else if (f.altitudeFeet !== undefined && compression?.source === 'gga') {
-      const v = Math.round(Math.log(f.altitudeFeet) / Math.log(1.002));
-      cs = String.fromCharCode(Math.floor(v / 91) + 33) + String.fromCharCode((v % 91) + 33);
-      altitudeInCs = Math.abs(Math.pow(1.002, v) - f.altitudeFeet) <= 1e-9 * f.altitudeFeet;
+      const alt = ggaAltitude(f.altitudeFeet);
+      cs = alt.cs;
+      altitudeInCs = alt.exact;
     } else if (f.rangeMiles !== undefined) {
       if (compression?.source === 'gga') refuse('a GGA compression type means the cs bytes hold altitude');
       const s = Math.round(Math.log(f.rangeMiles / 2) / Math.log(1.08));

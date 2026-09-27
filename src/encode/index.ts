@@ -99,9 +99,12 @@ function attempt(data: AprsData, mode: CommentMode): Attempt {
       return { binary: encodeCapabilities(data) };
     case 'third-party': {
       // The original information field must not be changed (APRS12c ch. 17).
+      // An inner packet built by hand, with no information field, is encoded from its data.
       const original = data.packet.information;
-      const inner = original.length > 0 ? original : encodeInformation(data.packet.data).info;
-      return { binary: encodeThirdParty(data, bytesToBinary(inner)) };
+      const inner = data.packet.data;
+      const asReceived = original.length > 0 || (inner.type === 'unrecognized' && inner.reason === 'empty');
+      const info = asReceived ? original : encodeInformation(inner).info;
+      return { binary: encodeThirdParty(data, bytesToBinary(info)) };
     }
     case 'user-defined':
       return { binary: encodeUserDefined(data) };
@@ -114,12 +117,25 @@ function attempt(data: AprsData, mode: CommentMode): Attempt {
   }
 }
 
-/** Where the written data would read back differently: strings, booleans and which fields are present. */
-function shapeDifferences(a: unknown, b: unknown, path: string, out: string[]): void {
-  if (typeof a === 'number' && typeof b === 'number') return;
+/** Numbers that agree within 1e-9, relative to the larger (absolute below 1). */
+function sameNumber(a: number, b: number): boolean {
+  const scale = Math.max(Math.abs(a), Math.abs(b));
+  return Math.abs(a - b) <= 1e-9 * (scale >= 1 ? scale : 1);
+}
+
+/**
+ * Where the written data would read back differently: strings, booleans and which fields are
+ * present, and with `numbers` the numbers too. Numbers are left out otherwise, because a value
+ * given with more precision than the format carries is written to the format's precision.
+ */
+function shapeDifferences(a: unknown, b: unknown, path: string, out: string[], numbers: boolean): void {
+  if (typeof a === 'number' && typeof b === 'number') {
+    if (numbers && !sameNumber(a, b)) out.push(`${path.replace(/\.$/, '')} would read back as ${a}`);
+    return;
+  }
   if (Array.isArray(a) && Array.isArray(b)) {
     if (a.length !== b.length) out.push(`${path.replace(/\.$/, '')} would have ${a.length} items, not ${b.length}`);
-    else a.forEach((x, i) => shapeDifferences(x, b[i], `${path}${i}.`, out));
+    else a.forEach((x, i) => shapeDifferences(x, b[i], `${path}${i}.`, out, numbers));
     return;
   }
   if (a !== null && b !== null && typeof a === 'object' && typeof b === 'object') {
@@ -128,7 +144,7 @@ function shapeDifferences(a: unknown, b: unknown, path: string, out: string[]): 
     for (const k of new Set([...Object.keys(ao), ...Object.keys(bo)])) {
       if (!(k in ao)) out.push(`${path}${k} would be lost`);
       else if (!(k in bo)) out.push(`${path}${k} would appear`);
-      else shapeDifferences(ao[k], bo[k], `${path}${k}.`, out);
+      else shapeDifferences(ao[k], bo[k], `${path}${k}.`, out, numbers);
     }
     return;
   }
@@ -162,7 +178,8 @@ function check(data: AprsData, a: Attempt): string[] {
     problems.push(`it would read back as ${decoded.data.type}`);
     return problems;
   }
-  shapeDifferences(toNeutralData(decoded.data), toNeutralData(expected(data, a)), '', problems);
+  // An NMEA sentence is written as it is, so everything read from it must be what the data says.
+  shapeDifferences(toNeutralData(decoded.data), toNeutralData(expected(data, a)), '', problems, data.type === 'nmea');
   return problems;
 }
 
