@@ -136,7 +136,7 @@ export type DaoPrecision = 'none' | 'thousandths' | 'base91';
 
 /** The `!DAO!` datum and precision (APRS12c ch. 5). */
 export interface Dao {
-  /** The datum letter, upper case (`W` is WGS84). */
+  /** The datum: a letter, upper case (`W` is WGS84), or a digit for a local datum. */
   readonly datum: string;
   readonly precision: DaoPrecision;
 }
@@ -146,7 +146,7 @@ export interface CommentTelemetry {
   readonly sequence: number;
   /** One to five analog values, 0-8280. */
   readonly analog: readonly number[];
-  /** The eight digital bits as a number, B1 the least significant bit. */
+  /** The eight binary channels as a number, 0-255, B1 the least significant bit. */
   readonly digital?: number;
 }
 
@@ -419,7 +419,7 @@ export interface RawWeather {
 /** A raw NMEA sentence (`$`). */
 export interface NmeaSentence {
   readonly type: 'nmea';
-  /** The sentence without the `$`. */
+  /** The sentence without the `$`, up to and including any `*hh` checksum. */
   readonly sentence: string;
   readonly hasChecksum?: boolean;
   readonly latitude?: number;
@@ -428,9 +428,11 @@ export interface NmeaSentence {
   readonly courseDegrees?: number;
   readonly speedKnots?: number;
   readonly altitudeM?: number;
-  /** `HH:MM:SS`, with any fraction of a second. */
+  /** `HH:MM:SS`, with any fraction of a second as sent. */
   readonly time?: string;
   readonly waypoint?: string;
+  /** Text after the checksum (TinyTrack and FreeTrak send one), as sent. */
+  readonly comment?: string;
 }
 
 /** A Maidenhead locator beacon (`[`), obsolete. */

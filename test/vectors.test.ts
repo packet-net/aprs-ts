@@ -93,8 +93,10 @@ function reencodeCheck(c: Case, lenient: Result): string[] {
       problems.push(`destination ${destination}, sent ${packet.destination}`);
     return problems;
   }
-  // equivalent: decodes, leniently, to the same data with no warnings or errors.
-  const header = encodeUtf8(`${packet.source}>${destination}:`);
+  // equivalent: decodes, leniently, to the same data with no warnings or errors, under a
+  // well-formed header (for Mic-E, the destination the encoder computed), so that a defect in the
+  // original header is not counted against the encoder.
+  const header = encodeUtf8(`${packet.source}>${encoded.destination ?? 'APZ001'}:`);
   const line = new Uint8Array(header.length + encoded.info.length);
   line.set(header, 0);
   line.set(encoded.info, header.length);
@@ -124,17 +126,15 @@ function encodeCheck(c: Case): string[] {
   return problems;
 }
 
+// A case without `device` says nothing about device identification (vectors README, "Rules the
+// cases rely on"), so only a recorded one is checked.
 function deviceCheck(c: Case, lenient: Result): string[] {
-  if ('header_error' in lenient) return [];
+  if ('header_error' in lenient || c.expect.device === undefined) return [];
   const device = lenient.packet.device;
-  if (c.expect.device !== undefined) {
-    const got: Record<string, string> = {};
-    if (device?.vendor !== undefined) got.vendor = device.vendor;
-    if (device?.model !== undefined) got.model = device.model;
-    return differences(got, c.expect.device, 'device');
-  }
-  if (lenient.packet.data.type === 'mic-e' && device !== undefined) return [`unexpected device ${JSON.stringify(device)}`];
-  return [];
+  const got: Record<string, string> = {};
+  if (device?.vendor !== undefined) got.vendor = device.vendor;
+  if (device?.model !== undefined) got.model = device.model;
+  return differences(got, c.expect.device, 'device');
 }
 
 for (const { file, cases } of loadCases()) {

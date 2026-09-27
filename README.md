@@ -145,7 +145,7 @@ try {
 }
 ```
 
-The encoder also works on data directly: `encodeInformation(data)` returns the information field bytes (and for Mic-E the destination), and `encodeTnc2` / `encodeAx25` a whole packet. Decoding and encoding again round-trips: data from the decoder encodes back to the same bytes, or to bytes that decode to the same data.
+The encoder also works on data directly: `encodeInformation(data)` returns the information field bytes (and for Mic-E the destination), and `encodeTnc2` / `encodeAx25` a whole packet. Decoding and encoding again round-trips: data from the decoder encodes back to the same bytes, or to bytes that decode to the same data, or is refused when there are none. It is never written as bytes that read back as different data, apart from wind or a range going back into a compressed position's cs bytes, which carry them in steps.
 
 ## Symbols
 
@@ -174,7 +174,7 @@ console.log(identifyTocall('APDW18')?.model); // DireWolf
 
 ## Conformance
 
-The conformance vectors are a git submodule at `vectors/`. The test suite runs every case with every check the vectors' README defines (the lenient result, the strict result, the single-tolerance check, re-encoding, and the encode cases), one test per check per case: 5,574 tests, all passing. A check this implementation could not pass would be listed in `test/known-differences.json` with the reason and skipped; the list is empty.
+The conformance vectors are a git submodule at `vectors/`. The test suite runs every case with every check the vectors' README defines (the lenient result, the strict result, the single-tolerance check, re-encoding, and the encode cases), one test per check per case: 6,015 tests, all passing. A check this implementation could not pass would be listed in `test/known-differences.json` with the reason and skipped; the list is empty.
 
 `scripts/diff-dump.mjs` writes the differential dump that the vectors' `tools/compare.py` reads, for comparing implementations over a whole capture:
 

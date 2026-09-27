@@ -71,17 +71,24 @@ export function parseTnc2Header(line: Uint8Array, options: ParseOptions): Parsed
   }
 }
 
-/** Parses `SOURCE>DEST,PATH` (without the colon). Used for TNC2 lines and third-party headers. */
+/** A third-party source: 1-9 printable ASCII characters (APRS12c ch. 17); `>` and `:` end it. */
+const THIRD_PARTY_SOURCE = /^[\x20-\x7e]{1,9}$/;
+
+/**
+ * Parses `SOURCE>DEST,PATH` (without the colon). Used for TNC2 lines and third-party headers,
+ * whose source need not be an APRS-IS address (`thirdParty`).
+ */
 export function parseHeaderText(
   header: string,
   options: ParseOptions,
   diags: Diagnostic[],
+  thirdParty = false,
 ): { source: string; destination: string; path: PathEntry[] } {
   const gt = header.indexOf('>');
   if (gt < 0) fail(diags, 'invalid-header');
   const source = header.slice(0, gt);
   if (source.length === 0) fail(diags, 'invalid-header');
-  if (!APRS_IS_ADDRESS.test(source)) fail(diags, 'invalid-address');
+  if (!(thirdParty ? THIRD_PARTY_SOURCE : APRS_IS_ADDRESS).test(source)) fail(diags, 'invalid-address');
   const parts = header.slice(gt + 1).split(',');
   const destination = parts[0]!;
   if (destination.length === 0) tolerate(options, diags, 'empty-destination');

@@ -5,30 +5,37 @@ import type { AprsData } from '../types.js';
 import type { DecodeContext } from './context.js';
 
 /** Known directed query types (APRS12c ch. 15), longest first. */
-const DIRECTED_QUERY_TYPES = ['APRSD', 'APRSH', 'APRSM', 'APRSO', 'APRSP', 'APRSS', 'APRST', 'PING?'];
+export const DIRECTED_QUERY_TYPES: readonly string[] = ['APRSD', 'APRSH', 'APRSM', 'APRSO', 'APRSP', 'APRSS', 'APRST', 'PING?'];
 
 const MESSAGE_ID_RE = /^([A-Za-z0-9]{1,5})(?:\}([A-Za-z0-9]{0,5}))?$/;
-const ACK_RE = /^(ack|rej)([A-Za-z0-9]{1,5})(?:\}([A-Za-z0-9]{0,5}))?(\{.*)?$/;
-const COEFFICIENT_RE = /^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/;
+const PLAIN_ID_RE = /^([A-Za-z0-9]{1,5})$/;
+// ack or rej, the ID, an optional reply-ack, and an optional message ID of its own.
+const ACK_RE = /^(ack|rej)([A-Za-z0-9]{1,5})(?:\}([A-Za-z0-9]{0,5}))?(\{[A-Za-z0-9]{1,5})?$/;
+// A number: an optional -, digits with an optional point, and for a coefficient an exponent.
+const COEFFICIENT_RE = /^-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/;
+const METADATA_PREFIXES = ['PARM.', 'UNIT.', 'EQNS.', 'BITS.'];
 
 interface SplitText {
   text: string;
   messageId?: string;
   replyAck?: string;
+  /** A `{` that does not start a message ID (`brace-in-message-text`). */
+  strayBrace: boolean;
 }
 
-/** Splits `text{id}ack` into its parts; reports a brace that does not start an ID. */
-function splitMessageId(ctx: DecodeContext, text: string): SplitText {
+/**
+ * Splits `text{id}ack` into its parts. Bulletins and telemetry metadata are not acknowledged, so
+ * for them (`replyAcks` false) the reply-ack form is not an ID and stays in the text (vectors
+ * interpretations.md, "Reply-acks are for messages").
+ */
+function splitMessageId(text: string, replyAcks: boolean): SplitText {
   const brace = text.lastIndexOf('{');
-  if (brace < 0) return { text };
-  const m = MESSAGE_ID_RE.exec(text.slice(brace + 1));
-  if (!m) {
-    ctx.tolerate('brace-in-message-text');
-    return { text };
-  }
-  const out: SplitText = { text: text.slice(0, brace), messageId: m[1]! };
+  if (brace < 0) return { text, strayBrace: false };
+  const m = (replyAcks ? MESSAGE_ID_RE : PLAIN_ID_RE).exec(text.slice(brace + 1));
+  if (!m) return { text, strayBrace: true };
+  const out: SplitText = { text: text.slice(0, brace), messageId: m[1]!, strayBrace: false };
   if (m[2] !== undefined) out.replyAck = m[2];
-  if (out.text.includes('{')) ctx.tolerate('brace-in-message-text');
+  if (out.text.includes('{')) out.strayBrace = true;
   return out;
 }
 
@@ -38,11 +45,12 @@ function parseList(body: string): string[] {
 
 /** `:`: a message, or one of the things sent in message form. */
 export function decodeMessage(ctx: DecodeContext, s: string): AprsData {
-  if (s[1] === ':') ctx.fail('invalid-message');
+  // When the tenth byte is :, the addressee is the nine bytes before it, whatever they hold.
   let colon = -1;
   if (s.length > 10 && s[10] === ':') {
     colon = 10;
   } else {
+    if (s[1] === ':') ctx.fail('invalid-message');
     for (let k = 2; k <= 9 && k < s.length; k++) {
       if (s[k] === ':') {
         colon = k;
@@ -75,12 +83,14 @@ export function decodeMessage(ctx: DecodeContext, s: string): AprsData {
   // Bulletins and announcements.
   if (/^BLN[0-9]/.test(addressee) || /^BLN[A-Z]$/.test(addressee) || /^BLN[A-Z]./.test(addressee)) {
     if (/^BLN[A-Z]./.test(addressee)) ctx.tolerate('letter-group-bulletin');
-    const split = splitMessageId(ctx, body);
+    const split = splitMessageId(body, false);
+    if (split.strayBrace) ctx.tolerate('brace-in-message-text');
     const text = ctx.text(split.text);
     return withId({ type: 'bulletin' as const, addressee, text }, split.messageId);
   }
   if (/^NWS[-_]/.test(addressee)) {
-    const split = splitMessageId(ctx, body);
+    const split = splitMessageId(body, false);
+    if (split.strayBrace) ctx.tolerate('brace-in-message-text');
     const text = ctx.text(split.text);
     return withId({ type: 'nws-bulletin' as const, addressee, text }, split.messageId);
   }
@@ -91,13 +101,15 @@ export function decodeMessage(ctx: DecodeContext, s: string): AprsData {
     if (query) return query;
   }
 
-  const split = splitMessageId(ctx, body);
-
   // Telemetry metadata: its structure is checked before the text's encoding.
-  const meta = telemetryMetadata(ctx, addressee, split.text, split.messageId);
-  if (meta) return meta;
-  const text = ctx.text(split.text);
+  if (METADATA_PREFIXES.includes(body.slice(0, 5))) {
+    const meta = telemetryMetadata(ctx, addressee, body);
+    if (meta) return meta;
+  }
 
+  const split = splitMessageId(body, true);
+  if (split.strayBrace) ctx.tolerate('brace-in-message-text');
+  const text = ctx.text(split.text);
   const message: { type: 'message'; addressee: string; text: string; messageId?: string; replyAck?: string } = {
     type: 'message',
     addressee,
@@ -134,33 +146,34 @@ function directedQuery(ctx: DecodeContext, addressee: string, body: string): Apr
     queryType = m[1]!;
     rest = q.slice(queryType.length);
   }
-  if (rest.includes('{')) {
-    ctx.info('invalid-query');
-    return undefined;
-  }
-  const target = rest.trim();
+  // One space between the type and the target is a separator, and spaces after the target are
+  // padding (APRSH pads its target to 9 characters).
+  if (rest.startsWith(' ')) rest = rest.slice(1);
+  const target = rest.replace(/ +$/, '');
   if (target.length === 0) return { type: 'directed-query', addressee, queryType };
   if (/^[A-Za-z0-9-]{1,9}$/.test(target)) return { type: 'directed-query', addressee, queryType, target };
   ctx.info('invalid-query');
   return undefined;
 }
 
-/** Telemetry metadata sent as a message; `binary` is the text's bytes, decoded once it is valid. */
-function telemetryMetadata(
-  ctx: DecodeContext,
-  addressee: string,
-  binary: string,
-  messageId: string | undefined,
-): AprsData | undefined {
+/** Telemetry metadata sent as a message; `body` is the text's bytes, decoded once it is valid. */
+function telemetryMetadata(ctx: DecodeContext, addressee: string, body: string): AprsData | undefined {
+  // Metadata takes a message ID, but not the reply-ack form.
+  const split = splitMessageId(body, false);
+  const binary = split.text;
+  const messageId = split.messageId;
   const kind = binary.slice(0, 5);
-  if (kind !== 'PARM.' && kind !== 'UNIT.' && kind !== 'EQNS.' && kind !== 'BITS.') return undefined;
   const rawBody = binary.slice(5);
   const invalid = (): undefined => {
     ctx.info('invalid-telemetry-metadata');
     return undefined;
   };
+  const braces = (): void => {
+    if (split.strayBrace) ctx.tolerate('brace-in-message-text');
+  };
   if (kind === 'PARM.' || kind === 'UNIT.') {
     if (parseList(rawBody).length > 13) return invalid();
+    braces();
     const list = parseList(ctx.text(rawBody));
     return kind === 'PARM.'
       ? withId({ type: 'telemetry-names' as const, addressee, names: list }, messageId)
@@ -169,14 +182,17 @@ function telemetryMetadata(
   if (kind === 'EQNS.') {
     const list = parseList(rawBody);
     // Trailing empty entries (commas and spaces) are the list stopping.
-    while (list.length > 0 && list[list.length - 1]!.trim() === '') list.pop();
+    while (list.length > 0 && /^ *$/.test(list[list.length - 1]!)) list.pop();
     if (list.length === 0 || list.length > 15) return invalid();
     const texts: string[] = [];
     for (const item of list) {
-      const t = item.trim();
-      if (!COEFFICIENT_RE.test(t)) return invalid();
+      // Spaces (U+0020 only) around a coefficient are padding (vectors interpretations.md,
+      // "Numbers in telemetry").
+      const t = item.replace(/^ +| +$/g, '');
+      if (!COEFFICIENT_RE.test(t) || !Number.isFinite(Number(t))) return invalid();
       texts.push(t);
     }
+    braces();
     return withId(
       { type: 'telemetry-coefficients' as const, addressee, coefficients: texts.map(Number), coefficientsText: texts },
       messageId,
@@ -184,6 +200,7 @@ function telemetryMetadata(
   }
   const m = /^([01]{8})(?:,(.*))?$/s.exec(rawBody);
   if (!m) return invalid();
+  braces();
   const bits: { type: 'telemetry-bits'; addressee: string; bits: string; project?: string } = {
     type: 'telemetry-bits',
     addressee,

@@ -109,6 +109,18 @@ function compressedPosition(f: PositionedFields, cs: string | undefined, compres
   return table + base91(y, 4) + base91(x, 4) + f.symbol.code + tail;
 }
 
+/**
+ * A GGA altitude in the cs bytes: 1.002^cs feet, so the nearest value they hold (1 foot for 0 feet
+ * or below), and whether that is exact. When it is not, a `/A=` altitude carries it and wins.
+ */
+function ggaAltitude(feet: number): { cs: string; exact: boolean } {
+  if (!Number.isFinite(feet)) refuse('altitude is not a number');
+  const v = feet <= 1 ? 0 : Math.round(Math.log(feet) / Math.log(1.002));
+  if (v > 91 * 91 - 1) refuse('altitude is too high for the compressed format');
+  const cs = String.fromCharCode(Math.floor(v / 91) + 33) + String.fromCharCode((v % 91) + 33);
+  return { cs, exact: Math.abs(Math.pow(1.002, v) - feet) <= 1e-9 * Math.abs(feet) };
+}
+
 // ---- data extensions and comment elements
 
 function courseSpeed(course: number | undefined, speed: number | undefined, what = 'course'): string {
@@ -191,14 +203,20 @@ export function telemetryText(t: CommentTelemetry): string {
   const v = (n: number, what: string): string => base91(whole(n, 0, 8280, what), 2);
   let out = '|' + v(t.sequence, 'telemetry sequence');
   for (const a of t.analog) out += v(a, 'telemetry value');
-  if (t.digital !== undefined) out += v(t.digital, 'telemetry bits');
+  // Eight binary channels; bits 9-13 are reserved.
+  if (t.digital !== undefined) out += base91(whole(t.digital, 0, 255, 'telemetry bits'), 2);
   return out + '|';
 }
 
 function daoText(f: PositionedFields, latRemainder: number, lonRemainder: number, applied: boolean): string {
   const dao = f.dao!;
   const datum = dao.datum;
-  if (!/^[A-Za-z]$/.test(datum)) refuse('the !DAO! datum is a letter');
+  if (/^[0-9]$/.test(datum)) {
+    // A local datum digit has no case to give a precision, so it only goes with spaces.
+    if (dao.precision !== 'none') refuse('a !DAO! datum digit carries no added precision');
+    return `!${datum}  !`;
+  }
+  if (!/^[A-Za-z]$/.test(datum)) refuse('the !DAO! datum is a letter or a digit');
   switch (dao.precision) {
     case 'none':
       return `!${datum.toUpperCase()}  !`;
@@ -226,6 +244,22 @@ function weatherValue(v: number | undefined, width: number, min: number, max: nu
   return pad(n, width);
 }
 
+/**
+ * Snowfall written exactly in its three characters, with a decimal point where it needs one
+ * (0.32 as `.32`), and refused when they cannot hold it.
+ */
+function snowfallText(inches: number): string {
+  if (!Number.isFinite(inches) || inches < 0) refuse('snowfall is not a number of inches');
+  let text: string;
+  if (Number.isInteger(inches)) text = pad(whole(inches, 0, 999, 'snowfall'), 3);
+  else if (String(inches).length === 3) text = String(inches);
+  else text = inches < 1 ? '.' + pad(Math.round(inches * 100), 2) : '';
+  if (!/^[0-9.]{3}$/.test(text) || /\..*\./.test(text) || Math.abs(Number(text) - inches) > 1e-9) {
+    refuse(`snowfall ${inches} does not fit in 3 characters`);
+  }
+  return text;
+}
+
 /** Weather fields after the wind: gust, temperature, rain, humidity, pressure, and on. */
 function weatherFields(w: Weather, mandatory: boolean): string {
   let out = '';
@@ -243,12 +277,7 @@ function weatherFields(w: Weather, mandatory: boolean): string {
     const l = whole(w.luminosityWM2, 0, 1999, 'luminosity');
     out += l < 1000 ? 'L' + pad(l, 3) : 'l' + pad(l - 1000, 3);
   }
-  if (w.snow24hIn !== undefined) {
-    const s = w.snow24hIn;
-    let text = Number.isInteger(s) ? pad(whole(s, 0, 999, 'snowfall'), 3) : String(s);
-    if (text.length !== 3 || !/^[0-9.]{3}$/.test(text)) text = refuse('snowfall is 3 characters');
-    out += 's' + text;
-  }
+  if (w.snow24hIn !== undefined) out += 's' + snowfallText(w.snow24hIn);
   if (w.rainRaw !== undefined) out += '#' + pad(whole(w.rainRaw, 0, 999, 'raw rain counter'), 3);
   for (const e of w.extra ?? []) {
     if (!/^[A-Za-z]$/.test(e.letter) || 'csgtrpPhbLl'.includes(e.letter)) refuse(`${e.letter} is not an extra weather field letter`);
@@ -296,9 +325,11 @@ function hasExtension(f: PositionedFields): string[] {
 /**
  * How the comment is joined on: `plain` (after a space when it follows a frequency), `joined`
  * (straight after a frequency, with no space) or `delimited` (after a `/`), for when it would
- * otherwise read as something else.
+ * otherwise read as something else; or `braces-first`, as `plain` but with the signpost or
+ * corridor braces written before the comment, for a comment holding braces that would be taken
+ * for them (the first well-formed braces are the signpost).
  */
-export type CommentMode = 'plain' | 'joined' | 'delimited';
+export type CommentMode = 'plain' | 'joined' | 'delimited' | 'braces-first';
 
 /** Encodes a position and what follows it. */
 function positionedBody(f: PositionedFields, mode: CommentMode): Body {
@@ -342,11 +373,9 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
       cs = '{' + String.fromCharCode(s + 33);
       compression = compression ?? DEFAULT_COMPRESSION;
     } else if (f.altitudeFeet !== undefined && compression?.source === 'gga') {
-      if (f.altitudeFeet < 1) refuse('a compressed altitude is at least 1 foot');
-      const v = Math.round(Math.log(f.altitudeFeet) / Math.log(1.002));
-      if (v > 91 * 91 - 1) refuse('altitude is too high for the compressed format');
-      cs = String.fromCharCode(Math.floor(v / 91) + 33) + String.fromCharCode((v % 91) + 33);
-      altitudeInCs = Math.abs(Math.pow(1.002, v) - f.altitudeFeet) <= 1e-9 * f.altitudeFeet;
+      const alt = ggaAltitude(f.altitudeFeet);
+      cs = alt.cs;
+      altitudeInCs = alt.exact;
     } else if (compression !== undefined) {
       refuse('a compression type needs cs data (course/speed, range or altitude)');
     }
@@ -393,7 +422,8 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
   if (f.frequency) text += (extensionEnded && !out.endsWith('/') ? '/' : '') + frequencyText(f.frequency);
   let braces = '';
   if (f.signpost !== undefined) {
-    if (!/^[\x21-\x7c\x7e]{1,3}$/.test(f.signpost) || f.signpost.includes('{') || f.signpost.includes('}')) refuse('a signpost is 1-3 printable characters');
+    // Printable ASCII, a space included, other than the braces around it.
+    if (!/^[\x20-\x7a\x7c\x7e]{1,3}$/.test(f.signpost)) refuse('a signpost is 1-3 printable ASCII characters other than { and }');
     braces = `{${f.signpost}}`;
   }
   if (f.area?.corridorWidthMiles !== undefined) {
@@ -405,7 +435,7 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
     if (text.length > 0 && mode !== 'joined') text += ' ';
     text += (mode === 'delimited' ? '/' : '') + freeText(comment, 'the comment');
   }
-  text += braces;
+  text = mode === 'braces-first' ? braces + text : text + braces;
   if (f.telemetry) text += telemetryText(f.telemetry);
   if (f.dao) text += daoText(f, latRem, lonRem, daoApplied);
   const body: Body = { text: out + text };
@@ -448,9 +478,9 @@ function weatherBody(f: PositionedFields): Body {
       compression = compression ?? DEFAULT_COMPRESSION;
       if (compression.source === 'gga') refuse('a GGA compression type means the cs bytes hold altitude');
     } else if (f.altitudeFeet !== undefined && compression?.source === 'gga') {
-      const v = Math.round(Math.log(f.altitudeFeet) / Math.log(1.002));
-      cs = String.fromCharCode(Math.floor(v / 91) + 33) + String.fromCharCode((v % 91) + 33);
-      altitudeInCs = Math.abs(Math.pow(1.002, v) - f.altitudeFeet) <= 1e-9 * f.altitudeFeet;
+      const alt = ggaAltitude(f.altitudeFeet);
+      cs = alt.cs;
+      altitudeInCs = alt.exact;
     } else if (f.rangeMiles !== undefined) {
       if (compression?.source === 'gga') refuse('a GGA compression type means the cs bytes hold altitude');
       const s = Math.round(Math.log(f.rangeMiles / 2) / Math.log(1.08));
@@ -656,6 +686,10 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
     if (d.typeCode === undefined) refuse('a Mic-E device suffix needs a type code');
     text += d.deviceSuffix;
   }
+  // Mic-E status text must not start with 0x1D, which would be taken for Rev 0 telemetry
+  // (APRS12c ch. 10), so a comment that would start it is written after a /.
+  const legacy = d.legacyTelemetry !== undefined && d.legacyTelemetry.length > 0;
+  if (!legacy && text.startsWith('\x1d') && mode !== 'delimited') return encodeMicE(d, 'delimited');
   info += text;
   return { text: info, destination };
 }

@@ -22,6 +22,7 @@ import type {
   VoiceFrequency,
   Weather,
 } from '../types.js';
+import type { DiagnosticCode } from '../codes.js';
 import type { DecodeContext } from './context.js';
 
 // ---- small helpers
@@ -57,7 +58,8 @@ function isCompressedTable(c: string | undefined): boolean {
   return c === '/' || c === '\\' || (c !== undefined && ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'j')));
 }
 
-export const KNOTS_TO_MPH = 1.150779448;
+/** Knots to mph, exactly: a nautical mile is 1852 m and a statute mile 1609.344 m. */
+export const KNOTS_TO_MPH = 1852 / 1609.344;
 export const METRES_PER_FOOT = 0.3048;
 
 // ---- timestamps
@@ -161,7 +163,9 @@ export function parseUncompressed(ctx: DecodeContext, s: string, i: number): Raw
   const latDegrees = Number(lat.substr(0, 2));
   const latMinutes = ambiguousMinutes(lat[2]!, lat[3]!, lat[5]!, lat[6]!, latAmbiguity);
   const rawLatMinutes = ambiguousMinutes(lat[2]!, lat[3]!, lat[5]!, lat[6]!, 0);
-  if (rawLatMinutes >= 60 || latDegrees > 90 || (latDegrees === 90 && rawLatMinutes > 0)) ctx.fail('invalid-latitude');
+  // The latitude it reports is the centre of its ambiguity box, so 90 degrees with blanked
+  // minutes (centred on 90 degrees 30 minutes) is past the pole.
+  if (rawLatMinutes >= 60 || latDegrees > 90 || (latDegrees === 90 && (rawLatMinutes > 0 || latMinutes > 0))) ctx.fail('invalid-latitude');
   let ns = lat[7]!;
   if (ns === 'n' || ns === 's') {
     ctx.tolerate('lowercase-hemisphere');
@@ -174,12 +178,19 @@ export function parseUncompressed(ctx: DecodeContext, s: string, i: number): Raw
   // Longitude
   const lon = s.substr(i + 9, 9);
   if (!isDigit(lon[0]) || !isDigit(lon[1]) || !isDigit(lon[2]) || lon[5] !== '.') ctx.fail('invalid-longitude');
-  const lonBlanks = ambiguityDigits([lon[3]!, lon[4]!, lon[6]!, lon[7]!]);
-  if (lonBlanks === undefined || lonBlanks > latAmbiguity) ctx.fail('invalid-longitude');
+  // The latitude alone sets the ambiguity: a longitude place it blanks may hold a digit or a
+  // space, and is ignored; every other place is a digit (vectors interpretations.md, "Longitude
+  // blanks follow the latitude").
+  const lonPlaces = [lon[3]!, lon[4]!, lon[6]!, lon[7]!];
+  for (let k = 0; k < 4; k++) {
+    const ignored = k >= 4 - latAmbiguity;
+    if (!isDigit(lonPlaces[k]) && !(ignored && lonPlaces[k] === ' ')) ctx.fail('invalid-longitude');
+  }
   const lonDegrees = Number(lon.substr(0, 3));
   const lonMinutes = ambiguousMinutes(lon[3]!, lon[4]!, lon[6]!, lon[7]!, latAmbiguity);
   const rawLonMinutes = ambiguousMinutes(lon[3]!, lon[4]!, lon[6]!, lon[7]!, 0);
-  if (rawLonMinutes >= 60 || lonDegrees > 180 || (lonDegrees === 180 && rawLonMinutes > 0)) ctx.fail('invalid-longitude');
+  // As for the latitude, the centre of an ambiguous 180 degrees is past 180.
+  if (rawLonMinutes >= 60 || lonDegrees > 180 || (lonDegrees === 180 && (rawLonMinutes > 0 || lonMinutes > 0))) ctx.fail('invalid-longitude');
   let ew = lon[8]!;
   if (ew === 'e' || ew === 'w') {
     ctx.tolerate('lowercase-hemisphere');
@@ -327,6 +338,12 @@ function daoAt(s: string, p: number): DaoFound | undefined {
       };
     return undefined;
   }
+  if (isDigit(d)) {
+    // A local datum (0-9) has no case to say how to read A and O, so it only carries spaces
+    // (vectors interpretations.md, "!DAO! datum digits").
+    if (a === ' ' && o === ' ') return { start: p, dao: { datum: d, precision: 'none' }, latAdd: 0, lonAdd: 0 };
+    return undefined;
+  }
   if (d >= 'a' && d <= 'z') {
     const datum = d.toUpperCase();
     if (a === ' ' && o === ' ') return { start: p, dao: { datum, precision: 'none' }, latAdd: 0, lonAdd: 0 };
@@ -362,8 +379,9 @@ function findCommentTelemetry(s: string): TelemetryFound | undefined {
   for (let k = 0; k < body.length; k += 2) values.push(base91Value(body.substr(k, 2)));
   const sequence = values[0]!;
   const rest = values.slice(1);
+  // The binary value is eight channels; bits 9-13 are reserved and ignored (APRS12c ch. 13).
   const telemetry: CommentTelemetry =
-    rest.length === 6 ? { sequence, analog: rest.slice(0, 5), digital: rest[5]! } : { sequence, analog: rest };
+    rest.length === 6 ? { sequence, analog: rest.slice(0, 5), digital: rest[5]! & 0xff } : { sequence, analog: rest };
   return { start: prev, end: last + 1, telemetry };
 }
 
@@ -411,14 +429,14 @@ function rateValue(c: string): number {
   return isDigit(c) ? c.charCodeAt(0) - 48 : c.charCodeAt(0) - 55;
 }
 
-interface ExtensionFound {
+export interface ExtensionFound {
   length: number;
   phg?: Phg;
   rangeMiles?: number;
   dfs?: Dfs;
 }
 
-function extensionAt(s: string, i: number): ExtensionFound | undefined {
+export function extensionAt(s: string, i: number): ExtensionFound | undefined {
   const t = s.slice(i, i + 9);
   let m = PHG_RE.exec(t);
   if (m) {
@@ -482,8 +500,9 @@ const MICROWAVE_BASE: Record<string, number> = {
 
 export { MICROWAVE_BASE };
 
-const FREQ_KHZ_RE = /^([0-9]{3}|[A-O][0-9]{2})\.([0-9]{3})MHz/i;
-const FREQ_10KHZ_RE = /^([0-9]{3}|[A-O][0-9]{2})\.([0-9]{2}) MHz/i;
+// The band letter is upper case (A96.000MHz is 1296 MHz); only MHz may be in any case.
+const FREQ_KHZ_RE = /^([0-9]{3}|[A-O][0-9]{2})\.([0-9]{3})[Mm][Hh][Zz]/;
+const FREQ_10KHZ_RE = /^([0-9]{3}|[A-O][0-9]{2})\.([0-9]{2}) [Mm][Hh][Zz]/;
 
 function frequencyMhz(whole: string, fraction: string): number {
   const first = whole[0]!;
@@ -592,6 +611,10 @@ interface LiftOptions {
   extensionFound: boolean;
   /** Look for a data extension at the very start of the text first (Mic-E status text). */
   extensionAtStart?: boolean;
+  /** A data extension already read from the start of the text (Mic-E status text). */
+  extension?: ExtensionFound;
+  /** Places in the text where something was already taken out (Mic-E status text). */
+  joins?: readonly number[];
   symbol: AprsSymbol;
   /** An area object's line shape, whose corridor width may be in braces. */
   areaLine?: boolean;
@@ -623,12 +646,19 @@ function removeRanges(s: string, ranges: readonly [number, number][]): string {
   return out + s.slice(from);
 }
 
-/** Lifts base-91 telemetry and the last `!DAO!` outside it. */
-function liftTelemetryAndDao(s: string): { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string } {
+/**
+ * Lifts base-91 telemetry and the last `!DAO!` outside it. A `!DAO!` is five bytes as sent, so one
+ * is never read across a `join`, a place in `s` where another element was already taken out.
+ */
+function liftTelemetryAndDao(
+  s: string,
+  joins: readonly number[] = [],
+): { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string } {
   const tel = findCommentTelemetry(s);
   let dao: DaoFound | undefined;
   for (let p = s.length - 5; p >= 0; p--) {
     if (tel && p + 5 > tel.start && p < tel.end) continue;
+    if (joins.some((j) => j > p && j < p + 5)) continue;
     const found = daoAt(s, p);
     if (found) {
       dao = found;
@@ -648,13 +678,16 @@ const ALTITUDE_RE = /\/A=(-[0-9]{5}|[0-9]{6})/;
 
 /** Lifts the structured elements out of a comment, in the order the vectors' README gives. */
 function liftComment(ctx: DecodeContext, text: string, options: LiftOptions): Lifted {
-  const first = liftTelemetryAndDao(text);
+  const first = liftTelemetryAndDao(text, options.joins);
   const lifted: Lifted = { rest: first.rest };
   if (first.telemetry) lifted.telemetry = first.telemetry;
   if (first.dao) lifted.dao = first.dao;
   let s = first.rest;
   let extensionFound = options.extensionFound;
-  if (options.extensionAtStart) {
+  if (options.extension) {
+    applyExtension(lifted, options.extension);
+    extensionFound = true;
+  } else if (options.extensionAtStart) {
     const ext = extensionAt(s, 0);
     if (ext) {
       applyExtension(lifted, ext);
@@ -670,15 +703,15 @@ function liftComment(ctx: DecodeContext, text: string, options: LiftOptions): Li
   }
   // Signpost or corridor braces.
   if (isSignpost(options.symbol) || options.areaLine) {
-    const brace = /\{([^{}]{1,3})\}/.exec(s);
+    // The first well-formed braces wherever they are: 1-3 printable ASCII characters other than
+    // a brace for a signpost, 1-3 digits for a corridor. Braces that do not qualify are comment
+    // text and do not stop the search (vectors interpretations.md).
+    const signpost = isSignpost(options.symbol);
+    const brace = (signpost ? /\{([\x20-\x7a\x7c\x7e]{1,3})\}/ : /\{([0-9]{1,3})\}/).exec(s);
     if (brace) {
-      if (isSignpost(options.symbol)) {
-        lifted.signpost = brace[1]!;
-        s = s.slice(0, brace.index) + s.slice(brace.index + brace[0].length);
-      } else if (/^[0-9]{1,3}$/.test(brace[1]!)) {
-        lifted.corridorWidthMiles = Number(brace[1]);
-        s = s.slice(0, brace.index) + s.slice(brace.index + brace[0].length);
-      }
+      if (signpost) lifted.signpost = brace[1]!;
+      else lifted.corridorWidthMiles = Number(brace[1]);
+      s = s.slice(0, brace.index) + s.slice(brace.index + brace[0].length);
     }
   }
   // A data extension later in the text, only when none came straight after the symbol.
@@ -782,15 +815,20 @@ function isLetter(c: string | undefined): boolean {
   return c !== undefined && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'));
 }
 
-/** Parses the run of weather fields from `j`. */
+/**
+ * Parses the run of weather fields from `j`, and reports what it finds in reading order: for a
+ * position, object or item report the wind first, where the `DDD/SSS` extension belongs (missing,
+ * incomplete, or sent as `c` and `s` fields), then each field's defects, then a missing gust or
+ * temperature. The fields are read the same whatever is tolerated, so they are read first and
+ * reported after.
+ */
 function parseWeatherFields(ctx: DecodeContext, s: string, j: number, options: WeatherFieldOptions): WeatherParse {
   const w: MutableWeather = {};
   if (options.wind.direction !== undefined) w.windDirectionDegrees = options.wind.direction;
   if (options.wind.speedMph !== undefined) w.windSpeedMph = options.wind.speedMph;
   const seen = new Set<string>();
-  let windKnown = options.wind.present;
-  let windFromFields = false;
-  let warnedWindFields = false;
+  const windKnown = options.wind.present;
+  const defects: DiagnosticCode[] = [];
   const extra: ExtraWeatherField[] = [];
   for (;;) {
     const letter = s[j];
@@ -798,47 +836,48 @@ function parseWeatherFields(ctx: DecodeContext, s: string, j: number, options: W
     let key = letter;
     const width = WEATHER_WIDTH[letter];
     if (letter === 's') {
-      // s is the wind speed after c (or first thing in a positionless report), else snowfall.
+      // s is the wind speed once the wind comes as fields (after c, or anywhere in a positionless
+      // report) until the speed is known, and snowfall after that.
       const windSlot = !seen.has('s:wind') && (seen.has('c') || (options.positionless && !windKnown));
       key = windSlot ? 's:wind' : 's:snow';
     }
+    // L and l are one field, luminosity.
+    if (letter === 'l') key = 'L';
     if (width !== undefined) {
       if (seen.has(key)) break;
       if (letter === 'c' && windKnown) break;
       if (key === 's:snow') {
+        // Snowfall is three characters, which may include one decimal point ("A decimal point
+        // is allowed for non-integer values", APRS12c ch. 12), so s.50 is 0.5 inches. Otherwise
+        // a run of dots, read up to the field's width, is an unknown snowfall.
         const v = s.slice(j + 1, j + 4);
-        const dots = /^\.+/.exec(s.slice(j + 1))?.[0];
-        if (dots !== undefined) {
-          if (dots.length !== 3) ctx.tolerate('non-standard-weather-field-width');
+        if (/^[0-9.]{3}$/.test(v) && /[0-9]/.test(v) && !/\..*\./.test(v)) {
+          w.snow24hIn = Number(v);
           seen.add(key);
-          j += 1 + dots.length;
+          j += 4;
           continue;
         }
-        if (!/^[0-9.]{3}$/.test(v) || !/[0-9]/.test(v)) break;
-        w.snow24hIn = Number(v);
+        // Only a run of dots may be shorter than three, and only when no digit follows it: s..6 is
+        // not a field, so the fields end there.
+        const dots = /^\.{1,3}/.exec(v)?.[0];
+        if (dots === undefined || (dots.length < 3 && isDigit(v[dots.length]))) break;
+        if (dots.length !== 3) defects.push('non-standard-weather-field-width');
         seen.add(key);
-        j += 4;
+        j += 1 + dots.length;
         continue;
       }
       let run = weatherValueRun(s, j + 1, width, letter === 't');
       if (run.length === 0) break;
       if (run.length > width + 1) run = run.slice(0, width);
-      if (run.length !== width) ctx.tolerate('non-standard-weather-field-width');
+      if (run.length !== width) defects.push('non-standard-weather-field-width');
       seen.add(key);
       j += 1 + run.length;
       const unknown = /^(?:\.+| +)$/.test(run);
-      if (letter === 'c' || key === 's:wind') {
-        windFromFields = true;
-        if (!warnedWindFields && !options.positionless) {
-          warnedWindFields = true;
-          ctx.tolerate('wind-fields-instead-of-extension');
-        }
-      }
       if (unknown) continue;
       const v = Number(run);
-      switch (key) {
+      switch (letter === 's' ? key : letter) {
         case 'c':
-          if (v > 360) ctx.tolerate('out-of-range-value');
+          if (v > 360) defects.push('out-of-range-value');
           else w.windDirectionDegrees = v;
           break;
         case 's:wind':
@@ -860,7 +899,7 @@ function parseWeatherFields(ctx: DecodeContext, s: string, j: number, options: W
           w.rainMidnightIn = v / 100;
           break;
         case 'h':
-          if (v > 100) ctx.tolerate('out-of-range-value');
+          if (v > 100) defects.push('out-of-range-value');
           else w.humidityPercent = v === 0 ? 100 : v;
           break;
         case 'b':
@@ -888,14 +927,21 @@ function parseWeatherFields(ctx: DecodeContext, s: string, j: number, options: W
     }
     break;
   }
-  if (seen.has('c') || seen.has('s:wind')) windKnown = true;
   if (extra.length > 0) w.extra = extra;
-  // Completeness: wind, and gust and temperature.
+  const hasDirection = seen.has('c');
+  const hasSpeed = seen.has('s:wind');
+  const windFromFields = hasDirection || hasSpeed;
   if (options.positionless) {
-    if (!seen.has('c') || !seen.has('s:wind') || !seen.has('g') || !seen.has('t')) ctx.tolerate('incomplete-weather');
+    for (const code of defects) ctx.tolerate(code);
+    if (!hasDirection || !hasSpeed || !seen.has('g') || !seen.has('t')) ctx.tolerate('incomplete-weather');
   } else {
-    // An uncompressed report's wind (the DDD/SSS extension, or c/s fields), then gust and temperature.
-    if (!windKnown && !options.compressed) ctx.tolerate('incomplete-weather');
+    // The wind is decided where the DDD/SSS extension belongs, before any field. After a
+    // compressed position whose cs bytes carry none, the wind is unknown, never missing.
+    if (!windKnown) {
+      if (windFromFields) ctx.tolerate('wind-fields-instead-of-extension');
+      if (!options.compressed && !(hasDirection && hasSpeed)) ctx.tolerate('incomplete-weather');
+    }
+    for (const code of defects) ctx.tolerate(code);
     if (!seen.has('g') || !seen.has('t')) ctx.tolerate('incomplete-weather');
   }
   return { weather: w, end: j, windFromFields };
@@ -904,16 +950,18 @@ function parseWeatherFields(ctx: DecodeContext, s: string, j: number, options: W
 const SOFTWARE_UNIT_RE = /^([A-Za-z])([A-Za-z0-9_-]{2,4})$/;
 
 /**
- * The software type and unit after the weather fields, or the weather comment. One leading
- * delimiter is dropped from a position's comment, not from a positionless report's.
+ * The software type and unit after the weather fields, or the weather comment. A position's
+ * base-91 telemetry and `!DAO!` are lifted out first, and one leading delimiter is dropped from its
+ * comment; a positionless report has no position for them to belong to, so it keeps them, and its
+ * delimiter, in its comment.
  */
 function weatherTail(
   ctx: DecodeContext,
   w: MutableWeather,
   rest: string,
-  dropDelimiter = true,
+  positioned: boolean,
 ): { comment?: string; telemetry?: CommentTelemetry; dao?: DaoFound } {
-  const lifted = liftTelemetryAndDao(rest);
+  const lifted = positioned ? liftTelemetryAndDao(rest) : { rest };
   const out: { comment?: string; telemetry?: CommentTelemetry; dao?: DaoFound } = {};
   if (lifted.telemetry) out.telemetry = lifted.telemetry;
   if (lifted.dao) out.dao = lifted.dao;
@@ -926,7 +974,7 @@ function weatherTail(
     return out;
   }
   ctx.tolerate('weather-comment');
-  if (dropDelimiter && (text[0] === ' ' || text[0] === '/')) text = text.slice(1);
+  if (positioned && (text[0] === ' ' || text[0] === '/')) text = text.slice(1);
   if (text.length > 0) out.comment = text;
   return out;
 }
@@ -954,13 +1002,8 @@ export function decodeAfterPosition(ctx: DecodeContext, s: string, i: number, po
     f.compressed = true;
     if (pos.compression) f.compression = pos.compression;
   }
-  let dao: DaoFound | undefined;
-  if (pos.symbol.code === '_') {
-    dao = decodeWeatherAfterPosition(ctx, s, i, pos, f);
-  } else {
-    dao = decodeExtensionAndComment(ctx, s, i, pos, f);
-  }
-  applyDao(ctx, f, pos, dao);
+  if (pos.symbol.code === '_') decodeWeatherAfterPosition(ctx, s, i, pos, f);
+  else decodeExtensionAndComment(ctx, s, i, pos, f);
   return f;
 }
 
@@ -979,13 +1022,7 @@ export function applyDao(ctx: DecodeContext, f: Fields, pos: RawPosition, dao: D
   f.longitude = lon;
 }
 
-function decodeExtensionAndComment(
-  ctx: DecodeContext,
-  s: string,
-  i: number,
-  pos: RawPosition,
-  f: Fields,
-): DaoFound | undefined {
+function decodeExtensionAndComment(ctx: DecodeContext, s: string, i: number, pos: RawPosition, f: Fields): void {
   let extensionFound = false;
   if (pos.compressed) {
     if (pos.csCourse !== undefined) {
@@ -1024,12 +1061,17 @@ function decodeExtensionAndComment(
       if (pos.symbol.table === '/' && pos.symbol.code === '\\') {
         const df = /^\/([0-9]{3})\/([0-9])([0-9])([0-9])/.exec(s.slice(i, i + 8));
         if (df) {
-          f.dfBearing = {
-            bearingDegrees: Number(df[1]),
-            number: Number(df[2]),
-            range: Number(df[3]),
-            quality: Number(df[4]),
-          };
+          // The bearing is degrees: one over 360 drops the whole /BRG/NRQ, as a course over 360 is dropped.
+          if (Number(df[1]) > 360) {
+            ctx.tolerate('out-of-range-value');
+          } else {
+            f.dfBearing = {
+              bearingDegrees: Number(df[1]),
+              number: Number(df[2]),
+              range: Number(df[3]),
+              quality: Number(df[4]),
+            };
+          }
           i += 8;
         }
       }
@@ -1053,8 +1095,9 @@ function decodeExtensionAndComment(
   }
   const areaLine = f.area !== undefined && (f.area.shape === 'line-down-right' || f.area.shape === 'line-down-left');
   const lifted = liftComment(ctx, s.slice(i), { extensionFound, symbol: pos.symbol, areaLine });
+  // The !DAO! is structure, so it is judged before the text's encoding.
+  applyDao(ctx, f, pos, lifted.dao);
   applyLifted(ctx, f, lifted);
-  return lifted.dao;
 }
 
 function applyLifted(ctx: DecodeContext, f: Fields, lifted: Lifted): void {
@@ -1094,13 +1137,7 @@ function parseStorm(s: string): { storm: Storm; length: number } | undefined {
 
 const DEFAULT_COMPRESSION: CompressionType = { fix: 'current', source: 'other', origin: 'software' };
 
-function decodeWeatherAfterPosition(
-  ctx: DecodeContext,
-  s: string,
-  i: number,
-  pos: RawPosition,
-  f: Fields,
-): DaoFound | undefined {
+function decodeWeatherAfterPosition(ctx: DecodeContext, s: string, i: number, pos: RawPosition, f: Fields): void {
   const wind: WindStart = { present: false };
   let windFromCs = false;
   if (pos.compressed && pos.csCourseRaw !== undefined) {
@@ -1131,26 +1168,34 @@ function decodeWeatherAfterPosition(
     i += 7;
   }
   const parsed = parseWeatherFields(ctx, s, i, { wind, positionless: false, compressed: pos.compressed });
-  const tail = weatherTail(ctx, parsed.weather, s.slice(parsed.end));
+  const tail = weatherTail(ctx, parsed.weather, s.slice(parsed.end), true);
   f.weather = parsed.weather;
   if (pos.compressed && pos.csBlank && !windFromCs) {
     const hasWind = parsed.weather.windDirectionDegrees !== undefined || parsed.weather.windSpeedMph !== undefined;
     if (hasWind && (windFromExtension || parsed.windFromFields)) f.compression = DEFAULT_COMPRESSION;
   }
   if (tail.telemetry) f.telemetry = tail.telemetry;
+  applyDao(ctx, f, pos, tail.dao);
   if (tail.comment !== undefined) {
     const text = ctx.text(tail.comment);
     if (text.length > 0) f.comment = text;
   }
-  return tail.dao;
 }
 
 // ---- Mic-E status text
 
 /** Lifts the elements out of Mic-E status text after its type code, altitude and locator. */
-export function liftMicEComment(ctx: DecodeContext, text: string, symbol: AprsSymbol): { lifted: Lifted } {
-  const lifted = liftComment(ctx, text, { extensionFound: false, extensionAtStart: true, symbol });
-  return { lifted };
+export function liftMicEComment(
+  ctx: DecodeContext,
+  text: string,
+  symbol: AprsSymbol,
+  extension: ExtensionFound | undefined,
+  joins: readonly number[],
+): { lifted: Lifted } {
+  const options: LiftOptions = extension
+    ? { extensionFound: true, extension, symbol, joins }
+    : { extensionFound: false, extensionAtStart: true, symbol, joins };
+  return { lifted: liftComment(ctx, text, options) };
 }
 
 /** Applies lifted comment elements to fields (Mic-E). */

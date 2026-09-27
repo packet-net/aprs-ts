@@ -93,7 +93,10 @@ function reencode(lenient) {
   if (equalBytes(encoded.info, sentInfo(packet)) && (packet.data.type !== 'mic-e' || destination === packet.destination)) {
     return 'identical';
   }
-  const header = new TextEncoder().encode(`${packet.source}>${destination}:`);
+  // Re-decode under a well-formed header, so that a defect in the original one (an empty
+  // destination, say) is not counted against the encoder: for Mic-E the destination the encoder
+  // computed, otherwise a normal one. The source decoded, so it is a valid address.
+  const header = new TextEncoder().encode(`${packet.source}>${encoded.destination ?? 'APZ001'}:`);
   const line = new Uint8Array(header.length + encoded.info.length);
   line.set(header, 0);
   line.set(encoded.info, header.length);
