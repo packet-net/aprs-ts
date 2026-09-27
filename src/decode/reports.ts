@@ -227,7 +227,10 @@ function decodeMicEDestination(ctx: DecodeContext, destination: string): MicEDes
   const num = (c: string): number => (c === ' ' ? 0 : c.charCodeAt(0) - 48);
   const degrees = num(digits[0]!) * 10 + num(digits[1]!);
   const minutes = num(digits[2]!) * 10 + num(digits[3]!) + (num(digits[4]!) * 10 + num(digits[5]!)) / 100;
-  if (minutes >= 60 || degrees > 90 || (degrees === 90 && minutes > 0)) ctx.fail('invalid-mic-e-destination');
+  // The latitude reported is the centre of the ambiguity box, so 90 degrees with blanked minutes
+  // (centred on 90 degrees 30 minutes, say) is past the pole.
+  const centre = micEMinutes(num(digits[2]!), num(digits[3]!), num(digits[4]!) * 10 + num(digits[5]!), ambiguity);
+  if (minutes >= 60 || degrees > 90 || (degrees === 90 && (minutes > 0 || centre > 0))) ctx.fail('invalid-mic-e-destination');
   const bits = kinds.slice(0, 3);
   const hasStd = bits.includes('std');
   const hasCustom = bits.includes('custom');
