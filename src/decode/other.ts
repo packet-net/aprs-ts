@@ -131,6 +131,10 @@ export function decodeTelemetry(ctx: DecodeContext, s: string): TelemetryReport 
   return out;
 }
 
+const FOOTPRINT_NUMBER = '[0-9]+\\.?[0-9]*|\\.[0-9]+';
+const FOOTPRINT_VALUE = `( ?(?:${FOOTPRINT_NUMBER})|-(?:${FOOTPRINT_NUMBER}))`;
+const FOOTPRINT_RE = new RegExp(`^${FOOTPRINT_VALUE},${FOOTPRINT_VALUE},([0-9]{4})$`);
+
 /** `?`: a general query. */
 export function decodeQuery(ctx: DecodeContext, s: string): Query {
   const m = /^\?([A-Z]+)\?(.*)$/s.exec(s);
@@ -138,8 +142,9 @@ export function decodeQuery(ctx: DecodeContext, s: string): Query {
   const out: { -readonly [K in keyof Query]: Query[K] } = { type: 'query', queryType: m[1]! };
   const rest = m[2]!;
   if (rest.length > 0) {
-    // Decimal degrees, a positive value with or without a leading space, and a 4-digit radius.
-    const f = /^( ?[0-9]+(?:\.[0-9]*)?|-[0-9]+(?:\.[0-9]*)?),( ?[0-9]+(?:\.[0-9]*)?|-[0-9]+(?:\.[0-9]*)?),([0-9]{4})$/.exec(rest);
+    // Decimal degrees, each a number as a telemetry value is (`-.1715`), a positive one with or
+    // without a leading space, and a 4-digit radius.
+    const f = FOOTPRINT_RE.exec(rest);
     if (!f) ctx.fail('invalid-general-query');
     const latitude = Number(f[1]);
     const longitude = Number(f[2]);
