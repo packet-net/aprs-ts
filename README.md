@@ -176,13 +176,15 @@ console.log(identifyTocall('APDW18')?.model); // DireWolf
 
 The conformance vectors are a git submodule at `vectors/`. The test suite runs every case with every check the vectors' README defines (the lenient result, the strict result, the single-tolerance check, re-encoding, and the encode cases), one test per check per case: 6,015 tests, all passing. A check this implementation could not pass would be listed in `test/known-differences.json` with the reason and skipped; the list is empty.
 
-`scripts/diff-dump.mjs` writes the differential dump that the vectors' `tools/compare.py` reads, for comparing implementations over a whole capture:
+`scripts/diff-dump.mjs` writes the differential dumps that the vectors' `tools/compare.py` reads, for comparing implementations (the vectors' README, "Comparing implementations"): decoding a capture or fuzzed packets (the default, with the bytes the encoder writes and the API view), encoding data in the neutral form (`--encode`), and building packets from recipes (`--build`):
 
 ```sh
 git submodule update --init
 npm ci && npm run build
 node scripts/diff-dump.mjs lines.hex.gz ts.jsonl.gz
-python3 vectors/tools/compare.py ts.jsonl.gz other.jsonl.gz --names TS Other --lines lines.hex.gz
+node scripts/diff-dump.mjs --encode data.jsonl.gz ts-encode.jsonl.gz
+node scripts/diff-dump.mjs --build recipes.jsonl.gz ts-build.jsonl.gz
+python3 vectors/tools/compare.py ts.jsonl.gz other.jsonl.gz --names TS Other --input lines.hex.gz
 ```
 
 The examples in this README run as tests too (`test/readme.test.ts`).

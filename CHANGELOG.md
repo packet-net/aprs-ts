@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- The encoder writes exactly the bytes the vectors' Encoding rule gives (packet-net/aprs-vectors, exact-bytes batch 1), and the conformance test compares them with each case's `canonical_info` byte for byte, and checks the new `rounded` re-encoding.
+- A position, object or item report's comment is written in one order: the voice frequency with its fields (in the first bytes, where radios read it), the signpost or corridor braces, the `/A=` altitude, the free text (after a space when a frequency comes before it), base-91 telemetry and the `!DAO!`. So `j006/058/146.520MHz/A=000889 Dayton Bound`, where it was `j006/058/A=000889146.520MHz Dayton Bound`; and braces are always written before the free text. A frequency straight after a seven-byte data extension follows a `/`.
+- The `!DAO!` on a compressed position gets the digits a `!DAO!` of its precision gives the position the compressed bytes report (`!sCp!`), where it had zeros (`!s!!!`). A position's digits and its `!DAO!` digits are the nearest step of the `!DAO!`'s precision, so a remainder close to the next hundredth of a minute carries into it.
+- Mic-E: a speed of 190-199 knots is written with `/`, the printable form, where it was DEL.
+- A snowfall under 1 inch is `.` and two digits (0.5 as `.50`), where it was `0.5`.
+- A value the compressed cs bytes carry in steps (a course or wind direction, a speed, a range) is rounded once, straight to the nearest step, halves away from zero; a course was first rounded to whole degrees. A compressed range under 2 miles is refused: the cs bytes cannot hold it. Everywhere else a value is rounded to a whole number, halves go away from zero (-12.5 to -13), where `Math.round` took them towards +infinity.
+- **API change:** `Query.footprint` keeps each number as sent (`latitudeText`, `longitudeText`, a leading space included), and the encoder writes it back that way (`?APRS? 34.360,-.1715,0200`), where it wrote the number again (`34.36,-0.1715`). The footprint's type is exported as `QueryFootprint`.
+- The builder has `speedKmh()`, a speed in km/h, beside `speed()` in knots.
+- `fromNeutralData` builds third-party data too: the inner packet's data, header and diagnostics, with no information field, so the encoder writes the inner packet from its data.
+- `scripts/diff-dump.mjs` has the vectors' encode (`--encode`) and build (`--build`) modes, and its decode records carry the bytes written (`written`, and `written_destination` for Mic-E) and the API view (`api`).
+
 ## 0.2.0
 
 - Faster decoding, about a third less time per packet: the device a destination identifies is remembered rather than matched against the whole device database for every packet, and bytes become text without an intermediate copy.
