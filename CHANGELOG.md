@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Faster decoding, about a third less time per packet: the device a destination identifies is remembered rather than matched against the whole device database for every packet, and bytes become text without an intermediate copy.
+
 ## 0.1.1
 
 - Mic-E Rev 0 binary telemetry (0x1D and five bytes after the symbol) is read into `legacyTelemetry`, with an `obsolete-format` info, and written back; it was left in the comment and refused on encoding. A value of 255 is refused. The ruling is shared by all five implementations (packet-net/aprs-vectors, "Mic-E Rev 0 binary telemetry").

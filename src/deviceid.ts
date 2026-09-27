@@ -47,11 +47,26 @@ function compile(): CompiledTocall[] {
   return compiled;
 }
 
+// Destinations repeat constantly (a handful of tocalls cover most traffic), and matching one means
+// trying up to every pattern in the database, so answers are remembered. The cache is bounded so a
+// stream of junk destinations cannot grow it without limit.
+const tocallCache = new Map<string, DeviceInfo | undefined>();
+const TOCALL_CACHE_LIMIT = 4096;
+
 /** The device a destination address (tocall) identifies, e.g. `APDW18` is Dire Wolf. */
 export function identifyTocall(destination: string): DeviceInfo | undefined {
   const call = destination.split('-')[0]!.toUpperCase();
-  for (const t of compile()) if (t.regex.test(call)) return toInfo(t.entry);
-  return undefined;
+  if (tocallCache.has(call)) return tocallCache.get(call);
+  let found: DeviceInfo | undefined;
+  for (const t of compile()) {
+    if (t.regex.test(call)) {
+      found = Object.freeze(toInfo(t.entry));
+      break;
+    }
+  }
+  if (tocallCache.size >= TOCALL_CACHE_LIMIT) tocallCache.clear();
+  tocallCache.set(call, found);
+  return found;
 }
 
 /**
