@@ -150,7 +150,7 @@ export function decodeQuery(ctx: DecodeContext, s: string): Query {
     const longitude = Number(f[2]);
     // A footprint is a real place (vectors interpretations.md).
     if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) ctx.fail('invalid-general-query');
-    out.footprint = { latitude, longitude, radiusMiles: Number(f[3]) };
+    out.footprint = { latitude, longitude, radiusMiles: Number(f[3]), latitudeText: f[1]!, longitudeText: f[2]! };
   }
   return out;
 }
