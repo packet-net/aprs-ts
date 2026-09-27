@@ -2,7 +2,7 @@
 
 import { binaryToBytes, bytesToBinary } from '../bytes.js';
 import type { Diagnostic, ParseOptions } from '../diagnostics.js';
-import { findQConstruct, parseHeaderText } from '../header.js';
+import { parseHeaderText } from '../header.js';
 import type { AprsData, AprsPacket, ThirdParty } from '../types.js';
 import { DecodeContext, Rejected } from './context.js';
 import { decodeMessage } from './message.js';
@@ -128,8 +128,7 @@ function decodeThirdParty(ctx: DecodeContext, s: string, options: ParseOptions):
     data: inner.data,
     diagnostics: [...headerDiags, ...inner.diagnostics],
   };
-  const q = findQConstruct(header.path);
-  if (q) packet.qConstruct = q;
+  // A q-construct is read only in the outer header: the third-party path is kept as sent.
   return { type: 'third-party', packet };
 }
 

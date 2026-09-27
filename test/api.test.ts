@@ -181,6 +181,14 @@ describe('options and diagnostics', () => {
     expect(toNeutralData(packet.data).longitude).toBe(-0);
   });
 
+  it('reads a q-construct only in the outer header, not in a third-party packet', () => {
+    const packet = decodeTnc2('N0CALL>APZ001:}N1CALL>APZ001,WIDE2-1,qAR,N2CALL:>hello');
+    expect(packet.qConstruct).toBeUndefined();
+    if (packet.data.type !== 'third-party') throw new Error(`decoded as ${packet.data.type}`);
+    expect(packet.data.packet.qConstruct).toBeUndefined();
+    expect(packet.data.packet.path.map((e) => e.address)).toEqual(['WIDE2-1', 'qAR', 'N2CALL']);
+  });
+
   it('round-trips a frame through the encoder', () => {
     const frame = encodeAx25({ source: 'M0LTE', path: ['WIDE1-1'], data: { type: 'status', text: 'x' } });
     expect(decodeAx25(frame).path).toEqual([{ address: 'WIDE1-1', used: false }]);
