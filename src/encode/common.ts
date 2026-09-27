@@ -19,10 +19,18 @@ export function pad(n: number, width: number): string {
   return String(n).padStart(width, '0');
 }
 
-/** A whole number within [min, max], else refused. */
+/**
+ * The nearest whole number, halves away from zero, as the vectors' rules round wherever they say
+ * "nearest" (`Math.round` takes a half towards +infinity, so -2.5 to -2).
+ */
+export function nearest(value: number): number {
+  return value < 0 ? -Math.round(-value) : Math.round(value);
+}
+
+/** A whole number within [min, max], else refused; a fraction is rounded to the nearest. */
 export function whole(value: number, min: number, max: number, what: string): number {
   if (!Number.isFinite(value)) refuse(`${what} is not a number`);
-  const n = Math.round(value);
+  const n = nearest(value);
   if (n < min || n > max) refuse(`${what} ${value} is out of range (${min}-${max})`);
   return n;
 }

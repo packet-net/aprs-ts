@@ -57,7 +57,7 @@ describe('builder', () => {
       .frequency(146.52, { tone: 'tone', toneValue: 100 })
       .comment('Hello')
       .toTnc2();
-    expect(line).toBe('M0LTE>APZTS1:@092345z4903.50N/07201.75W>/A=001234146.520MHz T100 Hello');
+    expect(line).toBe('M0LTE>APZTS1:@092345z4903.50N/07201.75W>146.520MHz T100/A=001234 Hello');
   });
 
   it('builds a compressed position with an overlay', () => {
