@@ -7,7 +7,8 @@ export function bytesToBinary(bytes: Uint8Array, start = 0, end = bytes.length):
   let s = '';
   const CHUNK = 8192;
   for (let i = start; i < end; i += CHUNK) {
-    s += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, Math.min(end, i + CHUNK))));
+    // apply takes the typed array directly; copying it into an Array first doubled the cost.
+    s += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(end, i + CHUNK)) as unknown as number[]);
   }
   return s;
 }
