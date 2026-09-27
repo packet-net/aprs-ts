@@ -703,16 +703,15 @@ function liftComment(ctx: DecodeContext, text: string, options: LiftOptions): Li
   }
   // Signpost or corridor braces.
   if (isSignpost(options.symbol) || options.areaLine) {
-    // A signpost overlay is printable ASCII (vectors interpretations.md).
-    const brace = isSignpost(options.symbol) ? /\{([\x20-\x7a\x7c\x7e]{1,3})\}/.exec(s) : /\{([^{}]{1,3})\}/.exec(s);
+    // The first well-formed braces wherever they are: 1-3 printable ASCII characters other than
+    // a brace for a signpost, 1-3 digits for a corridor. Braces that do not qualify are comment
+    // text and do not stop the search (vectors interpretations.md).
+    const signpost = isSignpost(options.symbol);
+    const brace = (signpost ? /\{([\x20-\x7a\x7c\x7e]{1,3})\}/ : /\{([0-9]{1,3})\}/).exec(s);
     if (brace) {
-      if (isSignpost(options.symbol)) {
-        lifted.signpost = brace[1]!;
-        s = s.slice(0, brace.index) + s.slice(brace.index + brace[0].length);
-      } else if (/^[0-9]{1,3}$/.test(brace[1]!)) {
-        lifted.corridorWidthMiles = Number(brace[1]);
-        s = s.slice(0, brace.index) + s.slice(brace.index + brace[0].length);
-      }
+      if (signpost) lifted.signpost = brace[1]!;
+      else lifted.corridorWidthMiles = Number(brace[1]);
+      s = s.slice(0, brace.index) + s.slice(brace.index + brace[0].length);
     }
   }
   // A data extension later in the text, only when none came straight after the symbol.
