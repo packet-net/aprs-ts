@@ -2,8 +2,10 @@
 
 ## Unreleased
 
+## 0.2.0
+
 - Faster decoding, about a third less time per packet: the device a destination identifies is remembered rather than matched against the whole device database for every packet, and bytes become text without an intermediate copy.
-- Brought into line with the rulings from two rounds of differential fuzzing of all five implementations (packet-net/aprs-vectors, commit dc3854a, 159 new cases). Passes every check.
+- Brought into line with the rulings from seven rounds of differential fuzzing of all five implementations (packet-net/aprs-vectors, commit dc3854a, 159 new cases). Passes every check.
 - **API change:** `NmeaSentence` gains `comment`, the text after the checksum as sent (TinyTrack and FreeTrak send one), and the neutral form writes it as `comment`. `sentence` now ends at the checksum. A sentence is `$`, an address of five upper-case letters or digits (or `P` and three or more), at least one field, printable ASCII, and at most one `*`, which must start a two-digit checksum; anything else is `invalid-nmea`, found before a checksum mismatch. Only GGA, GLL, RMC, VTG and WPL are read, and only from an approved address, so a proprietary sentence such as `$PGRMC` is kept as text. A position needs both coordinates, and a time must be in range. A speed, course or altitude may start with its decimal point (`.30`).
 - **API change:** `CommentTelemetry.digital` is the eight binary channels, 0-255; bits 9-13 of the value are reserved and ignored, and the encoder refuses a value over 255. `Dao.datum` may be a digit, a local datum, which only carries precision `none`.
 - Messages: an addressee field whose tenth byte is `:` is read as the addressee whatever it holds; `ack` or `rej` and an ID followed by anything but a message ID is a plain message; bulletins, NWS bulletins and telemetry metadata do not take the reply-ack form (`{12}` stays in the text, with `brace-in-message-text`); an `EQNS.` coefficient has no `+`, only spaces around it, and must be a finite number. A directed query's target may follow one space, and spaces after it are padding; the encoder pads an APRSH target to 9 characters and writes a target after a type the spec does not define after one space.
