@@ -602,6 +602,14 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   const dti = d.oldData ? "'" : '`';
   let info = dti + String.fromCharCode(dByte, mByte, hByte, spByte, dcByte, seByte) + d.symbol.code + d.symbol.table;
 
+  if (d.legacyTelemetry && d.legacyTelemetry.length > 0) {
+    // A 255 would be taken for Kenwood 0xFF padding and removed on the way back in.
+    if (d.legacyTelemetry.length !== 5 || d.legacyTelemetry.some((v) => !Number.isInteger(v) || v < 0 || v > 254)) {
+      refuse('obsolete Mic-E binary telemetry is 5 values, each 0-254');
+    }
+    info += String.fromCharCode(0x1d, ...d.legacyTelemetry);
+  }
+
   // Status text: type code, altitude, locator, then the comment elements, then the suffix.
   let text = '';
   if (d.typeCode !== undefined) {
@@ -648,7 +656,6 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
     if (d.typeCode === undefined) refuse('a Mic-E device suffix needs a type code');
     text += d.deviceSuffix;
   }
-  if (d.legacyTelemetry && d.legacyTelemetry.length > 0) refuse('obsolete Mic-E telemetry is not written');
   info += text;
   return { text: info, destination };
 }
