@@ -320,6 +320,13 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     ctx.tolerate('kenwood-ff-padding');
     text = text.replace(/\xff/g, '');
   }
+  // Rev 0 binary telemetry, looked for once the 0xFF padding is gone (vectors interpretations.md).
+  let legacyTelemetry: number[] | undefined;
+  if (text.length >= 6 && text[0] === '\x1d') {
+    ctx.info('obsolete-format');
+    legacyTelemetry = [...text.slice(1, 6)].map((c) => c.charCodeAt(0));
+    text = text.slice(6);
+  }
   let typeCode: string | undefined;
   if (text.length > 0 && TYPE_CODES.includes(text[0]!)) {
     typeCode = text[0]!;
@@ -367,12 +374,14 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     typeCode?: string;
     deviceSuffix?: string;
     locator?: string;
+    legacyTelemetry?: readonly number[];
     destinationSsid?: number;
   } = { type: 'mic-e', micEMessage: dest.message };
   if (dti === "'" || dti === '\x1d') head.oldData = true;
   if (typeCode !== undefined) head.typeCode = typeCode;
   if (deviceSuffix !== undefined) head.deviceSuffix = deviceSuffix;
   if (locator !== undefined) head.locator = locator;
+  if (legacyTelemetry !== undefined) head.legacyTelemetry = legacyTelemetry;
   if (dest.ssid !== 0) head.destinationSsid = dest.ssid;
   return { ...head, ...f };
 }
