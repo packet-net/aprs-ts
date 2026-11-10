@@ -1,6 +1,7 @@
 // Encoding positions, objects, items and Mic-E reports, with their data extensions, weather and
-// comment elements, in the canonical order: extension, altitude, frequency, comment, base-91
-// telemetry, !DAO! (and for Mic-E, the device suffix last).
+// comment elements, in the canonical order: extension, frequency, signpost or corridor braces,
+// altitude, comment, base-91 telemetry, !DAO! (vectors README, "Encoding"). Mic-E status text
+// keeps its own order: extension, altitude, frequency, comment, telemetry, !DAO!, device suffix.
 
 import { AREA_COLORS, AREA_SHAPES, KNOTS_TO_MPH, METRES_PER_FOOT, MICROWAVE_BASE } from '../decode/positioned.js';
 import type {
@@ -17,9 +18,10 @@ import type {
   Weather,
   WeatherReport,
 } from '../types.js';
-import { base91, checkSymbol, freeText, isValidTimestamp, pad, refuse, timestamp7, whole } from './common.js';
+import { base91, checkSymbol, freeText, isValidTimestamp, nearest, pad, refuse, timestamp7, whole } from './common.js';
 
 const EPS = 1e-9;
+const CUT_TOLERANCE = 1e-6;
 
 /** Negative, or negative zero: a zero coordinate keeps its hemisphere as the sign of zero. */
 export function isNegative(v: number): boolean {
@@ -32,23 +34,62 @@ interface Digits {
   degrees: number;
   /** Hundredths of a minute. */
   hundredths: number;
-  /** The remainder below a hundredth, in minutes (for a !DAO!). */
-  remainder: number;
+  /** The `!DAO!` digit below the hundredths: 0-9 in thousandths, 0-90 in ninety-firsts. */
+  extra: number;
 }
 
-/** Degrees and hundredths of a minute; truncated when a !DAO! or ambiguity follows, else rounded. */
-function digitsOf(value: number, truncate: boolean): Digits {
+/**
+ * How a coordinate's digits are found: rounded to the nearest hundredth of a minute, truncated to
+ * one (ambiguity, which reports the centre of the box the digits left give), or rounded to the
+ * nearest step of a `!DAO!` of that precision (thousandths, or ninety-firsts of a hundredth, vectors
+ * interpretations.md), whose last digit is the `!DAO!` one.
+ */
+type DigitsMode = 'round' | 'truncate' | 'thousandths' | 'base91';
+
+/** Degrees and hundredths of a minute, and the `!DAO!` digit below them. */
+function digitsOf(value: number, mode: DigitsMode, ambiguity = 0): Digits {
   const abs = Math.abs(value);
-  let degrees = Math.floor(abs + EPS);
-  let minutes = (abs - degrees) * 60;
-  if (minutes < 0) minutes = 0;
-  let hundredths = truncate ? Math.floor(minutes * 100 + EPS) : Math.round(minutes * 100);
+  // The ambiguity cut takes F2's tolerance: a value within 1e-6 of the box edge above it, in the
+  // box's units, is on that edge (vectors rulings, G2).
+  let degrees = Math.floor(abs + (mode === 'truncate' && ambiguity >= 4 ? CUT_TOLERANCE : EPS));
+  const minutes = Math.max(0, (abs - degrees) * 60);
+  let hundredths: number;
+  let extra = 0;
+  switch (mode) {
+    case 'round':
+      hundredths = nearest(minutes * 100);
+      break;
+    case 'truncate': {
+      // Hundredths of a minute in each box: a tenth, a minute, ten minutes, or a whole degree.
+      const box = ambiguity >= 4 ? 6000 : ambiguity === 3 ? 1000 : ambiguity === 2 ? 100 : ambiguity === 1 ? 10 : 1;
+      hundredths = ambiguity >= 4 ? 0 : Math.floor((minutes * 100) / box + (ambiguity > 0 ? CUT_TOLERANCE : EPS)) * box;
+      break;
+    }
+    case 'thousandths': {
+      const steps = nearest(minutes * 1000);
+      hundredths = Math.floor(steps / 10);
+      extra = steps % 10;
+      break;
+    }
+    case 'base91': {
+      const steps = nearest(minutes * 9100);
+      hundredths = Math.floor(steps / 91);
+      extra = steps % 91;
+      break;
+    }
+  }
   if (hundredths >= 6000) {
     degrees += 1;
     hundredths -= 6000;
   }
-  const remainder = Math.max(0, minutes - hundredths / 100);
-  return { degrees, hundredths, remainder };
+  return { degrees, hundredths, extra };
+}
+
+/** How a position's digits are found, given its ambiguity and `!DAO!`. */
+function digitsMode(f: PositionedFields): DigitsMode {
+  if ((f.ambiguity ?? 0) > 0) return 'truncate';
+  const precision = f.dao?.precision;
+  return precision === 'thousandths' || precision === 'base91' ? precision : 'round';
 }
 
 function blank(text: string, positions: readonly number[], ambiguity: number): string {
@@ -57,18 +98,16 @@ function blank(text: string, positions: readonly number[], ambiguity: number): s
   return chars.join('');
 }
 
-/** `ddmm.hhN/dddmm.hhW$`, with the DAO remainders. */
-function uncompressedPosition(
-  f: PositionedFields,
-  truncate: boolean,
-): { text: string; latRemainder: number; lonRemainder: number } {
+/** `ddmm.hhN/dddmm.hhW$`, with the `!DAO!` digits. */
+function uncompressedPosition(f: PositionedFields): { text: string; latExtra: number; lonExtra: number } {
   if (!(f.latitude >= -90 && f.latitude <= 90)) refuse(`latitude ${f.latitude} is out of range`);
   if (!(f.longitude >= -180 && f.longitude <= 180)) refuse(`longitude ${f.longitude} is out of range`);
   const ambiguity = f.ambiguity ?? 0;
   if (!Number.isInteger(ambiguity) || ambiguity < 0 || ambiguity > 4) refuse('ambiguity is 0-4 digits');
   checkSymbol(f.symbol);
-  const lat = digitsOf(f.latitude, truncate || ambiguity > 0);
-  const lon = digitsOf(f.longitude, truncate || ambiguity > 0);
+  const mode = digitsMode(f);
+  const lat = digitsOf(f.latitude, mode, ambiguity);
+  const lon = digitsOf(f.longitude, mode, ambiguity);
   if (lat.degrees > 90 || (lat.degrees === 90 && lat.hundredths > 0)) refuse('latitude is out of range');
   if (lon.degrees > 180 || (lon.degrees === 180 && lon.hundredths > 0)) refuse('longitude is out of range');
   const latMin = pad(Math.floor(lat.hundredths / 100), 2) + '.' + pad(lat.hundredths % 100, 2);
@@ -77,8 +116,8 @@ function uncompressedPosition(
   const lonText = blank(pad(lon.degrees, 3) + lonMin, [3, 4, 6, 7], ambiguity) + (isNegative(f.longitude) ? 'W' : 'E');
   return {
     text: latText + f.symbol.table + lonText + f.symbol.code,
-    latRemainder: lat.remainder,
-    lonRemainder: lon.remainder,
+    latExtra: lat.extra,
+    lonExtra: lon.extra,
   };
 }
 
@@ -94,8 +133,16 @@ function typeByte(c: CompressionType): string {
   return String.fromCharCode(((c.fix === 'current' ? 1 : 0) << 5) + (source << 3) + origin + 33);
 }
 
-/** The compressed position; `cs` is the two cs bytes or `undefined` for none. */
-function compressedPosition(f: PositionedFields, cs: string | undefined, compression: CompressionType | undefined): string {
+/**
+ * The compressed position; `cs` is the two cs bytes or `undefined` for none. Also gives the
+ * `!DAO!` digits for it: a decoder does not apply them, so they are the ones a `!DAO!` of that
+ * precision gives the position the bytes report, written uncompressed (vectors rulings, E2).
+ */
+function compressedPosition(
+  f: PositionedFields,
+  cs: string | undefined,
+  compression: CompressionType | undefined,
+): { text: string; latExtra: number; lonExtra: number } {
   if (!(f.latitude >= -90 && f.latitude <= 90)) refuse(`latitude ${f.latitude} is out of range`);
   if (!(f.longitude >= -180 && f.longitude <= 180)) refuse(`longitude ${f.longitude} is out of range`);
   if ((f.ambiguity ?? 0) !== 0) refuse('a compressed position cannot be ambiguous');
@@ -103,10 +150,15 @@ function compressedPosition(f: PositionedFields, cs: string | undefined, compres
   let table = f.symbol.table;
   if (table >= '0' && table <= '9') table = String.fromCharCode(table.charCodeAt(0) + 49); // 0-9 -> a-j
   const max = 91 ** 4 - 1;
-  const y = Math.min(max, Math.max(0, Math.round(380926 * (90 - f.latitude))));
-  const x = Math.min(max, Math.max(0, Math.round(190463 * (180 + f.longitude))));
+  const y = Math.min(max, Math.max(0, nearest(380926 * (90 - f.latitude))));
+  const x = Math.min(max, Math.max(0, nearest(190463 * (180 + f.longitude))));
   const tail = cs === undefined ? ' sT' : cs + typeByte(compression ?? DEFAULT_COMPRESSION);
-  return table + base91(y, 4) + base91(x, 4) + f.symbol.code + tail;
+  const mode = digitsMode(f);
+  return {
+    text: table + base91(y, 4) + base91(x, 4) + f.symbol.code + tail,
+    latExtra: digitsOf(90 - y / 380926, mode).extra,
+    lonExtra: digitsOf(x / 190463 - 180, mode).extra,
+  };
 }
 
 /**
@@ -115,10 +167,43 @@ function compressedPosition(f: PositionedFields, cs: string | undefined, compres
  */
 function ggaAltitude(feet: number): { cs: string; exact: boolean } {
   if (!Number.isFinite(feet)) refuse('altitude is not a number');
-  const v = feet <= 1 ? 0 : Math.round(Math.log(feet) / Math.log(1.002));
+  const v = feet <= 1 ? 0 : nearest(Math.log(feet) / Math.log(1.002));
   if (v > 91 * 91 - 1) refuse('altitude is too high for the compressed format');
   const cs = String.fromCharCode(Math.floor(v / 91) + 33) + String.fromCharCode((v % 91) + 33);
   return { cs, exact: Math.abs(Math.pow(1.002, v) - feet) <= 1e-9 * Math.abs(feet) };
+}
+
+/**
+ * A course or wind direction in the cs bytes: 4 degree steps, rounded to the nearest (halves away
+ * from zero), and one that rounds to 360 is c = 0, north (vectors rulings, E9).
+ */
+function compressedDirection(degrees: number): string {
+  return String.fromCharCode((nearest(degrees / 4) % 90) + 33);
+}
+
+/**
+ * A speed in knots in the cs bytes: 1.08^s - 1, the nearest s for any whole s, refused when that
+ * s is outside the byte (0-90; 90 is `{`), so -0.03 knots is 0 and -0.3 is refused (vectors
+ * rulings, G3).
+ */
+function compressedSpeed(knots: number, what: string): string {
+  if (!(knots > -1)) refuse(`${what} has no compressed form`);
+  const s = nearest(Math.log(knots + 1) / Math.log(1.08));
+  if (s < 0) refuse(`${what} is negative`);
+  if (s > 90) refuse(`${what} is too high for the compressed format`);
+  return String.fromCharCode(s + 33);
+}
+
+/**
+ * A range in the cs bytes: `{` and 2 x 1.08^s miles, the nearest s for any whole s, refused when
+ * that s is below 0, so 1.95 miles is 2 and 1.9 is refused (vectors rulings, G3).
+ */
+function compressedRange(miles: number): string {
+  if (!(miles > 0)) refuse('a compressed range is at least 2 miles');
+  const s = nearest(Math.log(miles / 2) / Math.log(1.08));
+  if (s < 0) refuse('a compressed range is at least 2 miles');
+  if (s > 90) refuse('range is out of range for the compressed format');
+  return '{' + String.fromCharCode(s + 33);
 }
 
 // ---- data extensions and comment elements
@@ -138,8 +223,10 @@ function rateChar(r: number): string {
   return v <= 9 ? String(v) : String.fromCharCode(55 + v);
 }
 
-function altitudeText(feet: number): string {
-  if (!Number.isInteger(feet)) refuse('an /A= altitude is whole feet');
+function altitudeText(given: number): string {
+  if (!Number.isFinite(given)) refuse('altitude is not a number');
+  // Whole feet, the nearest (vectors rulings, F2).
+  const feet = nearest(given);
   if (feet < 0) {
     if (feet < -99999) refuse('altitude is out of range');
     return `/A=-${pad(-feet, 5)}`;
@@ -154,7 +241,7 @@ export function frequencyText(f: VoiceFrequency): string {
   let whole3: string;
   let fraction: string;
   const resolution = f.tenKhzResolution ? 100 : 1000;
-  const scaled = Math.round(mhz * resolution);
+  const scaled = nearest(mhz * resolution);
   const intPart = Math.floor(scaled / resolution);
   const fracPart = scaled % resolution;
   fraction = pad(fracPart, f.tenKhzResolution ? 2 : 3);
@@ -208,7 +295,11 @@ export function telemetryText(t: CommentTelemetry): string {
   return out + '|';
 }
 
-function daoText(f: PositionedFields, latRemainder: number, lonRemainder: number, applied: boolean): string {
+/**
+ * The `!DAO!`: its datum, and digits `latExtra` and `lonExtra` (from `digitsOf`), or zeros when
+ * `applied` is false (an ambiguous position, whose digits say nothing finer).
+ */
+function daoText(f: PositionedFields, latExtra: number, lonExtra: number, applied: boolean): string {
   const dao = f.dao!;
   const datum = dao.datum;
   if (/^[0-9]$/.test(datum)) {
@@ -220,18 +311,12 @@ function daoText(f: PositionedFields, latRemainder: number, lonRemainder: number
   switch (dao.precision) {
     case 'none':
       return `!${datum.toUpperCase()}  !`;
-    case 'thousandths': {
+    case 'thousandths':
       if (!applied) return `!${datum.toUpperCase()}00!`;
-      const a = Math.min(9, Math.round(latRemainder * 1000));
-      const o = Math.min(9, Math.round(lonRemainder * 1000));
-      return `!${datum.toUpperCase()}${a}${o}!`;
-    }
-    case 'base91': {
+      return `!${datum.toUpperCase()}${latExtra}${lonExtra}!`;
+    case 'base91':
       if (!applied) return `!${datum.toLowerCase()}!!!`;
-      const a = Math.min(90, Math.round(latRemainder * 100 * 91));
-      const o = Math.min(90, Math.round(lonRemainder * 100 * 91));
-      return `!${datum.toLowerCase()}${String.fromCharCode(a + 33)}${String.fromCharCode(o + 33)}!`;
-    }
+      return `!${datum.toLowerCase()}${String.fromCharCode(latExtra + 33)}${String.fromCharCode(lonExtra + 33)}!`;
   }
 }
 
@@ -245,19 +330,19 @@ function weatherValue(v: number | undefined, width: number, min: number, max: nu
 }
 
 /**
- * Snowfall written exactly in its three characters, with a decimal point where it needs one
- * (0.32 as `.32`), and refused when they cannot hold it.
+ * Snowfall in its three characters (vectors rulings, F3): rounded to hundredths if that leaves it
+ * under 1, else to tenths if that leaves it under 10, else to a whole number; then a whole number
+ * is three digits (`002`, 0.995 as `001`), one under 1 is `.` and two digits (`.50`), any other a
+ * digit, `.` and a digit (`2.5`). One that rounds past 999 is refused.
  */
 function snowfallText(inches: number): string {
-  if (!Number.isFinite(inches) || inches < 0) refuse('snowfall is not a number of inches');
-  let text: string;
-  if (Number.isInteger(inches)) text = pad(whole(inches, 0, 999, 'snowfall'), 3);
-  else if (String(inches).length === 3) text = String(inches);
-  else text = inches < 1 ? '.' + pad(Math.round(inches * 100), 2) : '';
-  if (!/^[0-9.]{3}$/.test(text) || /\..*\./.test(text) || Math.abs(Number(text) - inches) > 1e-9) {
-    refuse(`snowfall ${inches} does not fit in 3 characters`);
-  }
-  return text;
+  if (!Number.isFinite(inches)) refuse('snowfall is not a number of inches');
+  const hundredths = nearest(inches * 100);
+  if (hundredths < 0) refuse('snowfall is negative');
+  if (hundredths < 100) return hundredths % 100 === 0 ? '000' : '.' + pad(hundredths, 2);
+  const tenths = nearest(inches * 10);
+  if (tenths < 100) return tenths % 10 === 0 ? pad(tenths / 10, 3) : `${Math.floor(tenths / 10)}.${tenths % 10}`;
+  return pad(whole(inches, 0, 999, 'snowfall'), 3);
 }
 
 /** Weather fields after the wind: gust, temperature, rain, humidity, pressure, and on. */
@@ -324,12 +409,11 @@ function hasExtension(f: PositionedFields): string[] {
 
 /**
  * How the comment is joined on: `plain` (after a space when it follows a frequency), `joined`
- * (straight after a frequency, with no space) or `delimited` (after a `/`), for when it would
- * otherwise read as something else; or `braces-first`, as `plain` but with the signpost or
- * corridor braces written before the comment, for a comment holding braces that would be taken
- * for them (the first well-formed braces are the signpost).
+ * (straight after a frequency, with no space), `delimited` (after a `/`) or `spaced` (after a
+ * space), for when it would otherwise read as something else: a space keeps a Mic-E comment from
+ * joining a PHG's digits into an altitude, where a `/` would not (vectors README, Encoding).
  */
-export type CommentMode = 'plain' | 'joined' | 'delimited' | 'braces-first';
+export type CommentMode = 'plain' | 'joined' | 'delimited' | 'spaced';
 
 /** Encodes a position and what follows it. */
 function positionedBody(f: PositionedFields, mode: CommentMode): Body {
@@ -338,7 +422,8 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
   if (isWeather && !f.weather) refuse('the weather station symbol (_) needs weather data');
   if (isWeather) return weatherBody(f);
   const exts = hasExtension(f);
-  const hasCourse = f.courseDegrees !== undefined || f.speedKnots !== undefined;
+  // DF and storm data extend a course/speed, so they count as that extension (vectors rulings, F7).
+  const hasCourse = f.courseDegrees !== undefined || f.speedKnots !== undefined || (!f.compressed && (f.dfBearing !== undefined || f.storm !== undefined));
   if (exts.length + (hasCourse ? 1 : 0) > 1) refuse(`only one data extension can follow the symbol (${[hasCourse ? 'course/speed' : '', ...exts].filter(Boolean).join(', ')})`);
   if (f.dfBearing && !(f.symbol.table === '/' && f.symbol.code === '\\')) refuse('a DF bearing needs the DF symbol (/\\)');
   if (f.storm && !(f.symbol.code === '@' && (f.symbol.table === '/' || f.symbol.table === '\\'))) refuse('storm data needs a hurricane symbol (/@ or \\@)');
@@ -348,29 +433,25 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
   let out = '';
   let compression: CompressionType | undefined;
   let altitudeInCs = false;
-  let latRem = 0;
-  let lonRem = 0;
+  let latExtra = 0;
+  let lonExtra = 0;
   let daoApplied = false;
   if (f.compressed) {
     if (f.phg || f.dfs || f.area || f.dfBearing || f.storm) refuse('a compressed report carries only course/speed, range or altitude');
     let cs: string | undefined;
     compression = f.compression;
     if (hasCourse) {
+      // The cs bytes hold both, so one alone would add a value the data does not have; a course of
+      // 0 (after rounding) would read back as 360 (vectors rulings, F1, F5).
       if (f.courseDegrees === undefined) refuse('a compressed course/speed needs a course');
+      if (f.speedKnots === undefined) refuse('a compressed course/speed needs a speed');
       if (compression?.source === 'gga') refuse('a GGA compression type means the cs bytes hold altitude');
-      const c = whole(f.courseDegrees, 1, 360, 'course') % 360;
-      if (c % 4 !== 0 && Math.abs(Math.round(c / 4) * 4 - f.courseDegrees) > 2) refuse('course is out of range');
-      const speed = f.speedKnots ?? 0;
-      if (speed < 0) refuse('speed is negative');
-      const s = Math.round(Math.log(speed + 1) / Math.log(1.08));
-      if (s > 90) refuse('speed is too high for the compressed format');
-      cs = String.fromCharCode(Math.round(c / 4) % 90 + 33) + String.fromCharCode(s + 33);
+      whole(f.courseDegrees, 1, 360, 'course');
+      cs = compressedDirection(f.courseDegrees) + compressedSpeed(f.speedKnots, 'speed');
       compression = compression ?? DEFAULT_COMPRESSION;
     } else if (f.rangeMiles !== undefined) {
       if (compression?.source === 'gga') refuse('a GGA compression type means the cs bytes hold altitude');
-      const s = Math.round(Math.log(f.rangeMiles / 2) / Math.log(1.08));
-      if (!(s >= 0 && s <= 90)) refuse('range is out of range for the compressed format');
-      cs = '{' + String.fromCharCode(s + 33);
+      cs = compressedRange(f.rangeMiles);
       compression = compression ?? DEFAULT_COMPRESSION;
     } else if (f.altitudeFeet !== undefined && compression?.source === 'gga') {
       const alt = ggaAltitude(f.altitudeFeet);
@@ -379,23 +460,27 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
     } else if (compression !== undefined) {
       refuse('a compression type needs cs data (course/speed, range or altitude)');
     }
-    out += compressedPosition(f, cs, compression);
+    const pos = compressedPosition(f, cs, compression);
+    out += pos.text;
+    latExtra = pos.latExtra;
+    lonExtra = pos.lonExtra;
+    daoApplied = true;
   } else {
     if (f.compression) refuse('an uncompressed position has no compression type');
-    const pos = uncompressedPosition(f, f.dao !== undefined);
+    const pos = uncompressedPosition(f);
     out += pos.text;
-    latRem = pos.latRemainder;
-    lonRem = pos.lonRemainder;
+    latExtra = pos.latExtra;
+    lonExtra = pos.lonExtra;
     daoApplied = (f.ambiguity ?? 0) === 0;
     if (hasCourse) {
+      // DF or storm data with no course and speed follows `.../...`, which reads back as unknown
+      // (vectors rulings, F8).
       out += courseSpeed(f.courseDegrees, f.speedKnots);
       if (f.dfBearing) {
         const b = f.dfBearing;
         out += `/${pad(whole(b.bearingDegrees, 0, 360, 'bearing'), 3)}/${whole(b.number, 0, 9, 'N')}${whole(b.range, 0, 9, 'R')}${whole(b.quality, 0, 9, 'Q')}`;
       }
       if (f.storm) out += stormText(f.storm);
-    } else if (f.dfBearing || f.storm) {
-      refuse('DF and storm data follow a course/speed extension');
     } else if (f.phg) {
       const p = f.phg;
       out += `PHG${whole(p.power, 0, 9, 'power code')}${heightChar(p.height)}${whole(p.gain, 0, 9, 'gain code')}${whole(p.directivity, 0, 9, 'directivity code')}`;
@@ -414,12 +499,14 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
       out += `${shape}${pad(whole(a.latOffset, 0, 99, 'area offset'), 2)}${c}${pad(whole(a.lonOffset, 0, 99, 'area offset'), 2)}`;
     }
   }
-  // Altitude, unless the compressed cs bytes carry it exactly.
-  if (f.altitudeFeet !== undefined && !altitudeInCs) out += altitudeText(f.altitudeFeet);
-  const extensionEnded = !f.compressed && (hasCourse || exts.length > 0) && f.altitudeFeet === undefined;
+  // After the data extension: the frequency with its fields, first, where radios read it (APRS12c
+  // ch. 18); the signpost or corridor braces; the altitude, unless the compressed cs bytes carry it
+  // exactly; the free text; base-91 telemetry; the !DAO! (vectors rulings, E3).
   let text = '';
-  // A frequency straight after a 7-byte extension is separated from it by / (a PHGR already ends in one).
-  if (f.frequency) text += (extensionEnded && !out.endsWith('/') ? '/' : '') + frequencyText(f.frequency);
+  // A frequency straight after a 7-byte extension follows a / (a PHGR already ends in one); after a
+  // compressed position, or a position with no extension, it follows straight on.
+  const extended = !f.compressed && (hasCourse || exts.length > 0);
+  if (f.frequency) text += (extended && !out.endsWith('/') ? '/' : '') + frequencyText(f.frequency);
   let braces = '';
   if (f.signpost !== undefined) {
     // Printable ASCII, a space included, other than the braces around it.
@@ -430,14 +517,17 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
     if (f.area.shape !== 'line-down-right' && f.area.shape !== 'line-down-left') refuse('only a line has a corridor');
     braces = `{${whole(f.area.corridorWidthMiles, 0, 999, 'corridor width')}}`;
   }
+  text += braces;
+  if (f.altitudeFeet !== undefined && !altitudeInCs) text += altitudeText(f.altitudeFeet);
   const comment = f.comment ?? '';
   if (comment.length > 0 || mode === 'delimited') {
-    if (text.length > 0 && mode !== 'joined') text += ' ';
+    // After a frequency (and anything after it) the free text follows a space, unless that would
+    // make it read as one of the frequency's fields.
+    if ((f.frequency && mode !== 'joined') || mode === 'spaced') text += ' ';
     text += (mode === 'delimited' ? '/' : '') + freeText(comment, 'the comment');
   }
-  text = mode === 'braces-first' ? braces + text : text + braces;
   if (f.telemetry) text += telemetryText(f.telemetry);
-  if (f.dao) text += daoText(f, latRem, lonRem, daoApplied);
+  if (f.dao) text += daoText(f, latExtra, lonExtra, daoApplied);
   const body: Body = { text: out + text };
   if (compression) body.compression = compression;
   return body;
@@ -445,7 +535,9 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
 
 function stormText(s: NonNullable<PositionedFields['storm']>): string {
   const type = s.type === 'tropical-storm' ? 'TS' : s.type === 'hurricane' ? 'HC' : s.type === 'tropical-depression' ? 'TD' : refuse('unknown storm type');
-  const v = (n: number | undefined, width: number, what: string): string => (n === undefined ? ' '.repeat(width) : pad(whole(n, 0, 10 ** width - 1, what), width));
+  // Each field is digits: one with no value has no form (vectors README, storm data).
+  const v = (n: number | undefined, width: number, what: string): string =>
+    n === undefined ? refuse(`storm data needs its ${what}`) : pad(whole(n, 0, 10 ** width - 1, what), width);
   let out = `/${type}/${v(s.sustainedWindKnots, 3, 'sustained wind')}^${v(s.gustKnots, 3, 'gust')}/${v(s.centralPressureMbar, 4, 'pressure')}>${v(s.hurricaneRadiusNm, 3, 'radius')}&${v(s.tropicalStormRadiusNm, 3, 'radius')}`;
   if (s.wholeGaleRadiusNm !== undefined) out += `%${v(s.wholeGaleRadiusNm, 3, 'radius')}`;
   return out;
@@ -461,8 +553,8 @@ function weatherBody(f: PositionedFields): Body {
   if (f.telemetry) refuse('comment telemetry goes in a comment, which a weather report does not have');
   let out = '';
   let compression: CompressionType | undefined;
-  let latRem = 0;
-  let lonRem = 0;
+  let latExtra = 0;
+  let lonExtra = 0;
   let daoApplied = false;
   let altitudeInCs = false;
   if (f.compressed) {
@@ -470,42 +562,41 @@ function weatherBody(f: PositionedFields): Body {
     let cs: string | undefined;
     if (w.windDirectionDegrees !== undefined || w.windSpeedMph !== undefined) {
       if (w.windDirectionDegrees === undefined || w.windSpeedMph === undefined) refuse('compressed wind needs both direction and speed');
-      const dir = whole(w.windDirectionDegrees, 0, 360, 'wind direction');
-      const knots = w.windSpeedMph / KNOTS_TO_MPH;
-      const s = Math.round(Math.log(knots + 1) / Math.log(1.08));
-      if (s < 0 || s > 90) refuse('wind speed is out of range for the compressed format');
-      cs = String.fromCharCode((Math.round(dir / 4) % 90) + 33) + String.fromCharCode(s + 33);
+      whole(w.windDirectionDegrees, 0, 360, 'wind direction');
+      cs = compressedDirection(w.windDirectionDegrees) + compressedSpeed(w.windSpeedMph / KNOTS_TO_MPH, 'wind speed');
       compression = compression ?? DEFAULT_COMPRESSION;
       if (compression.source === 'gga') refuse('a GGA compression type means the cs bytes hold altitude');
     } else if (f.altitudeFeet !== undefined && compression?.source === 'gga') {
-      const alt = ggaAltitude(f.altitudeFeet);
-      cs = alt.cs;
-      altitudeInCs = alt.exact;
+      // With no comment to hold a /A=, the nearest value the cs bytes hold (vectors rulings, F14).
+      cs = ggaAltitude(f.altitudeFeet).cs;
+      altitudeInCs = true;
     } else if (f.rangeMiles !== undefined) {
       if (compression?.source === 'gga') refuse('a GGA compression type means the cs bytes hold altitude');
-      const s = Math.round(Math.log(f.rangeMiles / 2) / Math.log(1.08));
-      if (!(s >= 0 && s <= 90)) refuse('range is out of range for the compressed format');
-      cs = '{' + String.fromCharCode(s + 33);
+      cs = compressedRange(f.rangeMiles);
       compression = compression ?? DEFAULT_COMPRESSION;
     } else if (compression !== undefined) {
       refuse('a compression type needs cs data');
     }
-    out += compressedPosition(f, cs, compression);
+    const pos = compressedPosition(f, cs, compression);
+    out += pos.text;
+    latExtra = pos.latExtra;
+    lonExtra = pos.lonExtra;
+    daoApplied = true;
     if (f.altitudeFeet !== undefined && !altitudeInCs) refuse('a weather report has no altitude in its comment');
     out += weatherFields(w, true);
   } else {
     if (f.compression) refuse('an uncompressed position has no compression type');
     if (f.altitudeFeet !== undefined) refuse('a weather report has no altitude in its comment');
-    const pos = uncompressedPosition(f, f.dao !== undefined);
+    const pos = uncompressedPosition(f);
     out += pos.text;
-    latRem = pos.latRemainder;
-    lonRem = pos.lonRemainder;
+    latExtra = pos.latExtra;
+    lonExtra = pos.lonExtra;
     daoApplied = (f.ambiguity ?? 0) === 0;
     out += courseSpeed(w.windDirectionDegrees, w.windSpeedMph, 'wind direction');
     out += weatherFields(w, true);
   }
   if (f.telemetry) out += telemetryText(f.telemetry);
-  if (f.dao) out += daoText(f, latRem, lonRem, daoApplied);
+  if (f.dao) out += daoText(f, latExtra, lonExtra, daoApplied);
   const body: Body = { text: out };
   if (compression) body.compression = compression;
   return body;
@@ -586,8 +677,14 @@ function micEDestination(d: MicEReport, lat: Digits, lonDegrees: number): string
   return out;
 }
 
+/**
+ * Mic-E reports whose altitude was given in feet by a program, so it goes in a `/A=` and not the
+ * Mic-E altitude bytes, whose unit is the metre (vectors rulings, B2).
+ */
+export const ALTITUDE_GIVEN_IN_FEET = new WeakSet<object>();
+
 export function micEAltitude(feet: number): string | undefined {
-  const metres = Math.round(feet * METRES_PER_FOOT);
+  const metres = nearest(feet * METRES_PER_FOOT);
   if (Math.abs(metres / METRES_PER_FOOT - feet) > 1e-6) return undefined;
   const v = metres + 10000;
   if (v < 0 || v > 91 ** 3 - 1) return undefined;
@@ -604,9 +701,9 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   if (d.dfBearing || d.storm || d.area || d.signpost !== undefined) refuse('a Mic-E report cannot carry that data');
   const ambiguity = d.ambiguity ?? 0;
   if (!Number.isInteger(ambiguity) || ambiguity < 0 || ambiguity > 4) refuse('ambiguity is 0-4 digits');
-  const truncate = d.dao !== undefined || ambiguity > 0;
-  const lat = digitsOf(d.latitude, truncate);
-  const lon = digitsOf(d.longitude, truncate);
+  const digits = digitsMode(d);
+  const lat = digitsOf(d.latitude, digits, ambiguity);
+  const lon = digitsOf(d.longitude, digits, ambiguity);
   if (lat.degrees > 90 || (lat.degrees === 90 && lat.hundredths > 0)) refuse('latitude is out of range');
   if (lon.degrees > 179) refuse('Mic-E longitude is below 180 degrees');
   const destination = micEDestination(d, lat, lon.degrees);
@@ -617,16 +714,24 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   else if (deg <= 99) dByte = deg + 28;
   else if (deg <= 109) dByte = deg + 8;
   else dByte = deg - 100 + 28;
-  // With ambiguity the digits a decoder ignores are written as the centre it reports.
-  const mValue = Math.floor(lon.hundredths / 100);
-  const hundredths = lon.hundredths % 100;
+  // With ambiguity the digits a decoder ignores are written as the centre it reports (vectors
+  // README, Mic-E): 03.5x is 03.55, 03.xx 03.50, 0x.xx 05.00, xx.xx 30.00.
+  let lonHundredths = lon.hundredths;
+  if (ambiguity === 1) lonHundredths = Math.floor(lonHundredths / 10) * 10 + 5;
+  else if (ambiguity === 2) lonHundredths = Math.floor(lonHundredths / 100) * 100 + 50;
+  else if (ambiguity === 3) lonHundredths = Math.floor(lonHundredths / 1000) * 1000 + 500;
+  else if (ambiguity === 4) lonHundredths = 3000;
+  const mValue = Math.floor(lonHundredths / 100);
+  const hundredths = lonHundredths % 100;
   const mByte = mValue < 10 ? mValue + 88 : mValue + 28;
   const hByte = hundredths + 28;
-  // Speed and course: speed tens + 80 (so values under 200 knots are printable), course + 400.
+  // Speed and course in their printable forms (APRS12c ch. 10): speed tens + 80 below 190 knots,
+  // and as they are from 190 on (190-199 is /, not DEL: vectors rulings, E5); course + 400.
   const speed = d.speedKnots === undefined ? 0 : whole(d.speedKnots, 0, 799, 'speed');
-  const course = d.courseDegrees === undefined ? 0 : whole(d.courseDegrees, 0, 360, 'course');
+  // A course of 0 (after rounding) reads back as no course, so it is refused (vectors rulings, F1).
+  const course = d.courseDegrees === undefined ? 0 : whole(d.courseDegrees, 1, 360, 'course');
   const tens = Math.floor(speed / 10);
-  const spByte = tens < 20 ? tens + 80 + 28 : tens + 28;
+  const spByte = tens < 19 ? tens + 80 + 28 : tens + 28;
   const dcByte = (speed % 10) * 10 + Math.floor(course / 100) + 4 + 28;
   const seByte = (course % 100) + 28;
   const dti = d.oldData ? "'" : '`';
@@ -648,7 +753,7 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   }
   let altitudeInComment: number | undefined;
   if (d.altitudeFeet !== undefined) {
-    const alt = micEAltitude(d.altitudeFeet);
+    const alt = ALTITUDE_GIVEN_IN_FEET.has(d) ? undefined : micEAltitude(d.altitudeFeet);
     if (alt !== undefined) text += alt;
     else altitudeInComment = d.altitudeFeet;
   }
@@ -670,18 +775,21 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   if (d.frequency) rest += (exts > 0 && altitudeInComment === undefined && !after.endsWith('/') ? '/' : '') + frequencyText(d.frequency);
   const comment = d.comment ?? '';
   if (comment.length > 0 || mode === 'delimited') {
-    if (rest.length > 0 && mode !== 'joined') rest += ' ';
+    if ((rest.length > 0 && mode !== 'joined') || mode === 'spaced') rest += ' ';
     rest += (mode === 'delimited' ? '/' : '') + freeText(comment, 'the comment');
   }
   after += rest;
-  if (d.telemetry) after += telemetryText(d.telemetry);
-  if (d.dao) after += daoText(d, lat.remainder, lon.remainder, ambiguity === 0);
+  // Telemetry and the !DAO! are lifted before a locator is read, so they follow it straight on
+  // (vectors rulings, F16).
+  let lifted = '';
+  if (d.telemetry) lifted += telemetryText(d.telemetry);
+  if (d.dao) lifted += daoText(d, lat.extra, lon.extra, ambiguity === 0);
   if (d.locator !== undefined) {
     if (!/^[A-R]{2}[0-9]{2}(?:[A-X]{2})?$/.test(d.locator)) refuse('the locator is 4 or 6 characters, upper case');
     text += `${d.locator}/G`;
     if (after.length > 0) text += ' ';
   }
-  text += after;
+  text += after + lifted;
   if (d.deviceSuffix !== undefined) {
     if (d.typeCode === undefined) refuse('a Mic-E device suffix needs a type code');
     text += d.deviceSuffix;

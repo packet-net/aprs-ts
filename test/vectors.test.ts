@@ -4,7 +4,8 @@
 //   lenient    the default decoder's result
 //   strict     the strict decoder's result (same, a rejection, or a different reading)
 //   tolerance  with only the one tolerance a case used turned off, the strict result
-//   reencode   encoding the lenient data again: identical, equivalent, or refused
+//   reencode   encoding the lenient data again: identical, equivalent (and then canonical_info
+//              byte for byte), rounded (canonical_info byte for byte), or refused
 //   encode     an encode case: the information field (and Mic-E destination), or a refusal
 //
 // Checks listed in known-differences.json are skipped, with the reason in the test name.
@@ -18,6 +19,7 @@ import {
   encodeInformation,
   formatDiagnostic,
   fromNeutralData,
+  hexToBytes,
   ParseOptions,
   toNeutralData,
   type AprsPacket,
@@ -83,6 +85,9 @@ function reencodeCheck(c: Case, lenient: Result): string[] {
     throw e;
   }
   if (c.reencode === 'refused') return [`expected a refusal, wrote ${JSON.stringify(latin1(encoded.info))}`];
+  // rounded: a value the format holds only in steps is rounded, so the data read back differs from
+  // the original by that rounding and is not compared; the bytes are exactly canonical_info.
+  if (c.reencode === 'rounded') return canonicalCheck(c, encoded.info, true);
   const destination = encoded.destination ?? packet.destination;
   if (c.reencode === 'identical') {
     const problems: string[] = [];
@@ -105,7 +110,20 @@ function reencodeCheck(c: Case, lenient: Result): string[] {
   const bad = again.diagnostics.map(formatDiagnostic).filter((d) => !d.startsWith('info:'));
   if (bad.length > 0) problems.push(`re-decoding reported ${bad.join(', ')}`);
   if (problems.length > 0) problems.push(`wrote ${JSON.stringify(latin1(encoded.info))}`);
+  else problems.push(...canonicalCheck(c, encoded.info, false));
   return problems;
+}
+
+/**
+ * The bytes written against the case's canonical_info, byte for byte: binding for `equivalent`
+ * (when the case gives one) and for `rounded` (which always does).
+ */
+function canonicalCheck(c: Case, written: Uint8Array, required: boolean): string[] {
+  let want: Uint8Array;
+  if (typeof c.canonical_info === 'string') want = encodeUtf8(c.canonical_info);
+  else if (typeof c.canonical_info_hex === 'string') want = hexToBytes(c.canonical_info_hex);
+  else return required ? ['the case gives no canonical_info'] : [];
+  return hex(want) === hex(written) ? [] : [`wrote ${JSON.stringify(latin1(written))}, canonical ${JSON.stringify(latin1(want))}`];
 }
 
 function encodeCheck(c: Case): string[] {

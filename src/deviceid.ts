@@ -3,7 +3,7 @@
 // its type code and suffix.
 
 import { MICE, MICE_LEGACY, TOCALLS, type DeviceEntry } from './deviceid-data.js';
-import type { DeviceInfo } from './types.js';
+import type { AprsData, DeviceInfo } from './types.js';
 
 export { DEVICEID_SOURCE, DEVICE_CLASSES } from './deviceid-data.js';
 
@@ -53,9 +53,13 @@ function compile(): CompiledTocall[] {
 const tocallCache = new Map<string, DeviceInfo | undefined>();
 const TOCALL_CACHE_LIMIT = 4096;
 
-/** The device a destination address (tocall) identifies, e.g. `APDW18` is Dire Wolf. */
+/**
+ * The device a destination address (tocall) identifies, e.g. `APDW18` is Dire Wolf. The lookup is
+ * case-sensitive: the database lists tocalls in upper case and a destination is a callsign, so
+ * `APNl02` matches nothing (vectors rulings, A1).
+ */
 export function identifyTocall(destination: string): DeviceInfo | undefined {
-  const call = destination.split('-')[0]!.toUpperCase();
+  const call = destination.split('-')[0]!;
   if (tocallCache.has(call)) return tocallCache.get(call);
   let found: DeviceInfo | undefined;
   for (const t of compile()) {
@@ -95,4 +99,9 @@ export function identifyMicE(typeCode: string | undefined, suffix: string | unde
     return m ? toInfo(m) : undefined;
   }
   return undefined;
+}
+
+/** The device a packet identifies: by its Mic-E type code and suffix, else by its destination. */
+export function identifyDevice(data: AprsData, destination: string): DeviceInfo | undefined {
+  return data.type === 'mic-e' ? identifyMicE(data.typeCode, data.deviceSuffix) : identifyTocall(destination);
 }

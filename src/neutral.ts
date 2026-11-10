@@ -3,7 +3,8 @@
 // sent. Used by the conformance tests and the differential dump, and handy for comparing this
 // library with another implementation.
 
-import { formatDiagnostic } from './diagnostics.js';
+import type { DiagnosticCode } from './codes.js';
+import { diagnostic, formatDiagnostic, type Diagnostic, type Severity } from './diagnostics.js';
 import type {
   AprsData,
   AprsPacket,
@@ -590,8 +591,26 @@ export function fromNeutralData(d: J): AprsData {
     case 'unrecognized':
       o.reason = d.reason;
       break;
-    case 'third-party':
-      throw new RangeError('third-party data cannot be built from the neutral form');
+    case 'third-party': {
+      // The inner packet as data: its information field is written from its data, and its
+      // diagnostics are kept, so one with a tolerated defect is refused, as the Encoding rule says.
+      const p: J = d.packet ?? {};
+      o.packet = {
+        source: p.source ?? '',
+        destination: p.destination ?? '',
+        path: ((p.path ?? []) as string[]).map((e) => (e.endsWith('*') ? { address: e.slice(0, -1), used: true } : { address: e, used: false })),
+        information: new Uint8Array(0),
+        data: fromNeutralData(p.data ?? { type: 'unrecognized', reason: 'empty' }),
+        diagnostics: ((p.diagnostics ?? []) as string[]).map(diagnosticFrom),
+      };
+      break;
+    }
   }
   return o as unknown as AprsData;
+}
+
+/** A diagnostic from its neutral form, `severity:code`. */
+function diagnosticFrom(text: string): Diagnostic {
+  const colon = text.indexOf(':');
+  return diagnostic(text.slice(0, colon) as Severity, text.slice(colon + 1) as DiagnosticCode);
 }

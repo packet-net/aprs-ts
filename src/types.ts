@@ -442,11 +442,24 @@ export interface MaidenheadBeacon {
   readonly comment?: string;
 }
 
+/** A general query's footprint: a latitude, a longitude and a radius (APRS12c ch. 15). */
+export interface QueryFootprint {
+  /** Degrees, north positive. */
+  readonly latitude: number;
+  /** Degrees, east positive. */
+  readonly longitude: number;
+  readonly radiusMiles: number;
+  /** The latitude as sent (` 34.0`, `-.1715`), with any leading space, so it can be written back the same. */
+  readonly latitudeText?: string;
+  /** The longitude as sent, so it can be written back the same. */
+  readonly longitudeText?: string;
+}
+
 /** A general query (`?`). */
 export interface Query {
   readonly type: 'query';
   readonly queryType: string;
-  readonly footprint?: { readonly latitude: number; readonly longitude: number; readonly radiusMiles: number };
+  readonly footprint?: QueryFootprint;
 }
 
 /** A station capability: a token, or a token and its value. */

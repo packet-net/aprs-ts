@@ -209,11 +209,21 @@ export function encodeQuery(d: Query): string {
   if (d.footprint) {
     const f = d.footprint;
     if (!(f.latitude >= -90 && f.latitude <= 90) || !(f.longitude >= -180 && f.longitude <= 180)) refuse('the footprint is out of range');
-    const coord = (v: number): string => (v < 0 ? numberText(v) : ` ${numberText(v)}`);
-    out += `${coord(f.latitude)},${numberText(f.longitude)},${pad(whole(f.radiusMiles, 0, 9999, 'radius'), 4)}`;
+    // Each value as sent, a leading space or its absence included, when that is the value (vectors
+    // rulings, E1); otherwise one that is not negative, 0 included, after a space (APRS12c ch. 15;
+    // vectors rulings, F11, F15).
+    const asSent = (text: string | undefined, v: number): string | undefined =>
+      text !== undefined && FOOTPRINT_VALUE.test(text) && Number(text) === v ? text : undefined;
+    const value = (v: number): string => (v < 0 ? numberText(v) : ` ${numberText(v)}`);
+    const lat = asSent(f.latitudeText, f.latitude) ?? value(f.latitude);
+    const lon = asSent(f.longitudeText, f.longitude) ?? value(f.longitude);
+    out += `${lat},${lon},${pad(whole(f.radiusMiles, 0, 9999, 'radius'), 4)}`;
   }
   return out;
 }
+
+/** A footprint value as a decoder reads it: a number as a telemetry value is, a positive one after at most one space. */
+const FOOTPRINT_VALUE = /^(?: ?(?:[0-9]+\.?[0-9]*|\.[0-9]+)|-(?:[0-9]+\.?[0-9]*|\.[0-9]+))$/;
 
 /** A control character: below U+0020, or U+007F. */
 const CONTROL_RE = /[\x00-\x1f\x7f]/;

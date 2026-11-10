@@ -20,6 +20,7 @@ import {
   isDigit,
   isSymbolTable,
   liftMicEComment,
+  liftTelemetryAndDao,
   METRES_PER_FOOT,
   parsePosition,
   parsePositionlessWeather,
@@ -257,6 +258,8 @@ function micEMinutes(tens: number, units: number, hundredths: number, ambiguity:
 
 const TYPE_CODES = '`\'>] ';
 
+const MIC_E_LOCATOR = /^([A-Ra-r]{2}[0-9]{2}(?:[A-Xa-x]{2})?)\/G/;
+
 /** `` ` ``, `'`, 0x1c, 0x1d: a Mic-E report. */
 export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
   // The Rev 0 beta data type identifiers are obsolete: said at the DTI, before anything is checked.
@@ -348,6 +351,7 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
   }
   let altitudeFeet: number | undefined;
   let extension: ExtensionFound | undefined;
+  let extensionAfterLocator = false;
   // Where a later altitude was taken out of the text: a !DAO! is never read across it.
   let join: number | undefined;
   const altFirst = /^([!-{]{3})\}/.exec(text);
@@ -355,32 +359,52 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     altitudeFeet = (base91Value(altFirst[1]!) - 10000) / METRES_PER_FOOT;
     text = text.slice(4);
   } else {
-    // A data extension straight after the type code is read first, so its bytes are never taken
-    // for an altitude later in the text (`0PH}` in `PHG3330PH}`).
-    extension = extensionAt(text, 0);
-    if (extension) text = text.slice(extension.length);
+    // A data extension straight after the type code, or after a locator there and its space, is
+    // read first, so its bytes are never taken for an altitude later in the text (`0PH}` in
+    // `PHG3330PH}`).
+    const loc = MIC_E_LOCATOR.exec(text);
+    const at = loc && text[loc[0].length] === ' ' ? loc[0].length + 1 : 0;
+    extension = extensionAt(text, at);
+    if (extension) {
+      text = text.slice(0, at) + text.slice(at + extension.length);
+      extensionAfterLocator = at > 0;
+    }
     const later = /([!-{]{3})\}/.exec(text);
     if (later && ctx.allows('mic-e-altitude-not-first')) {
       altitudeFeet = (base91Value(later[1]!) - 10000) / METRES_PER_FOOT;
       text = text.slice(0, later.index) + text.slice(later.index + 4);
       join = later.index;
+    } else if (!ctx.options.tolerates('mic-e-altitude-not-first')) {
+      // A later altitude declined is left as text; lifting telemetry or the !DAO! must then not
+      // join the bytes either side of its place into another one. With no later altitude, strict reads as lenient (vectors
+      // README, Mic-E).
+      const lifted = liftTelemetryAndDao(text);
+      const across = [...lifted.rest.matchAll(/(?=([!-{]{3})\})/g)].some((m) => lifted.cuts.some((c) => c > m.index && c < m.index + 4));
+      if (later && across) ctx.fail('mic-e-altitude-not-first');
     }
   }
   if (altitudeFeet !== undefined) f.altitudeFeet = altitudeFeet;
+  // Base-91 telemetry and the !DAO! are lifted before the locator is read, so a locator followed
+  // straight by either has no missing space (vectors rulings, F16).
+  const joins = join !== undefined && join > 0 ? [join] : [];
+  const pre = liftTelemetryAndDao(text, joins);
+  text = pre.rest;
+  // A locator is read only at the start of the status text, after any type code or a Mic-E
+  // altitude there; after a PHG or RNG, say, it is text (vectors rulings, F17).
   let locator: string | undefined;
-  const loc = /^([A-Ra-r]{2}[0-9]{2}(?:[A-Xa-x]{2})?)\/G/.exec(text);
+  const loc = extension && !extensionAfterLocator ? null : MIC_E_LOCATOR.exec(text);
   if (loc) {
     locator = loc[1]!.toUpperCase();
-    const before = text.length;
     text = text.slice(loc[0].length);
     if (text.length > 0) {
       if (text[0] === ' ') text = text.slice(1);
       else ctx.tolerate('missing-space-after-locator');
     }
-    if (join !== undefined) join -= before - text.length;
   }
-  const joins = join !== undefined && join > 0 ? [join] : [];
-  const { lifted } = liftMicEComment(ctx, text, pos.symbol, extension, joins);
+  // A PHG or RNG is straight after the type code only where it is so as sent: one that reaches
+  // there once a later altitude is lifted is late (vectors mic-e/an-rng-reached-only-by-lifting-an-altitude-is-late).
+  const startJoined = !extension && !loc && join !== undefined && (extensionAt(text, 0)?.length ?? 0) > join;
+  const { lifted } = liftMicEComment(ctx, text, pos.symbol, extension, pre, !startJoined);
   // The !DAO! is structure, so it is judged before the text's encoding.
   applyDao(ctx, f, pos, lifted.dao);
   applyLiftedTo(ctx, f, lifted);

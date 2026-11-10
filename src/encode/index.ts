@@ -1,7 +1,7 @@
 // The encoder: writes only what the spec allows and refuses anything else with a reason. Free
 // text is checked by decoding what was written: if the result does not read back as the same
-// data (a comment that would read as an altitude, say), a `/` delimiter is tried, then the
-// signpost or corridor braces before the comment, and if none of that helps the encoder refuses.
+// data (a comment that would read as an altitude, say), the comment is tried straight after a
+// frequency, then after a `/` delimiter, and if neither helps the encoder refuses.
 
 import { binaryToBytes, bytesToBinary, decodeUtf8 } from '../bytes.js';
 import { decodeInformation } from '../decode/index.js';
@@ -30,7 +30,7 @@ import {
   encodeThirdParty,
   encodeUserDefined,
 } from './other.js';
-import { encodeItem, encodeMicE, encodeObject, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
+import { DEFAULT_COMPRESSION, encodeItem, encodeMicE, encodeObject, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
 
 export { AprsEncodeError } from './common.js';
 
@@ -156,14 +156,19 @@ function expected(data: AprsData, a: Attempt): AprsData {
   let d = data;
   if ((d.type === 'position' || d.type === 'object' || d.type === 'item') && d.compressed && a.compression) {
     if (!d.compression) d = { ...d, compression: a.compression };
-    if (d.courseDegrees !== undefined && d.speedKnots === undefined) d = { ...d, speedKnots: 0 };
   }
-  if (d.type === 'mic-e') {
-    if (d.speedKnots === undefined) d = { ...d, speedKnots: 0 };
-    if (d.courseDegrees === 0) {
-      const copy: Record<string, unknown> = { ...d };
-      delete copy.courseDegrees;
-      d = copy as unknown as AprsData;
+  if (d.type === 'mic-e' && d.speedKnots === undefined) d = { ...d, speedKnots: 0 };
+  if (d.type === 'third-party' && d.packet.information.length === 0) {
+    // An inner packet written from its data: cs values with no compression type got the default.
+    const inner = d.packet.data;
+    if ((inner.type === 'position' || inner.type === 'object' || inner.type === 'item') && inner.compressed && !inner.compression) {
+      const w = inner.weather;
+      const carries =
+        inner.courseDegrees !== undefined ||
+        inner.speedKnots !== undefined ||
+        inner.rangeMiles !== undefined ||
+        (w !== undefined && (w.windDirectionDegrees !== undefined || w.windSpeedMph !== undefined));
+      if (carries) d = { ...d, packet: { ...d.packet, data: { ...inner, compression: DEFAULT_COMPRESSION } } };
     }
   }
   return d;
@@ -179,8 +184,22 @@ function check(data: AprsData, a: Attempt): string[] {
     return problems;
   }
   // An NMEA sentence is written as it is, so everything read from it must be what the data says.
-  shapeDifferences(toNeutralData(decoded.data), toNeutralData(expected(data, a)), '', problems, data.type === 'nmea');
+  shapeDifferences(withoutInnerInfo(toNeutralData(decoded.data)), withoutInnerInfo(toNeutralData(expected(data, a))), '', problems, data.type === 'nmea');
   return problems;
+}
+
+/**
+ * A third-party packet's neutral data without its inner packet's `info` diagnostics: an info is
+ * not a defect, so an inner packet that reads back with only those is written (vectors rulings, F10).
+ */
+function withoutInnerInfo(n: Record<string, unknown>): Record<string, unknown> {
+  const packet = n.packet as Record<string, unknown> | undefined;
+  if (n.type !== 'third-party' || !packet || !Array.isArray(packet.diagnostics)) return n;
+  const kept = (packet.diagnostics as string[]).filter((d) => !d.startsWith('info:'));
+  const copy: Record<string, unknown> = { ...packet };
+  if (kept.length > 0) copy.diagnostics = kept;
+  else delete copy.diagnostics;
+  return { ...n, packet: copy };
 }
 
 /**
@@ -192,9 +211,9 @@ export function encodeInformation(data: AprsData): EncodedInformation {
   let problems = check(data, first);
   let chosen = first;
   if (problems.length > 0 && typeof (data as { comment?: unknown }).comment === 'string') {
-    // The comment would read as something else: try it straight after a frequency, then after a /,
-    // then after the signpost or corridor braces.
-    for (const mode of ['joined', 'delimited', 'braces-first'] as const) {
+    // The comment would read as something else: try it straight after a frequency, then after a
+    // /, then after a space.
+    for (const mode of ['joined', 'delimited', 'spaced'] as const) {
       let next: Attempt | undefined;
       try {
         next = attempt(data, mode);

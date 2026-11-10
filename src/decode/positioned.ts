@@ -618,6 +618,15 @@ interface LiftOptions {
   symbol: AprsSymbol;
   /** An area object's line shape, whose corridor width may be in braces. */
   areaLine?: boolean;
+  /** Telemetry and the `!DAO!`, already lifted out of the text (Mic-E status text). */
+  pre?: PreLifted;
+}
+
+/** Base-91 telemetry and a `!DAO!` lifted out of text, and the text left. */
+export interface PreLifted {
+  telemetry?: CommentTelemetry;
+  dao?: DaoFound;
+  rest: string;
 }
 
 /** What the comment lifting found. */
@@ -650,10 +659,10 @@ function removeRanges(s: string, ranges: readonly [number, number][]): string {
  * Lifts base-91 telemetry and the last `!DAO!` outside it. A `!DAO!` is five bytes as sent, so one
  * is never read across a `join`, a place in `s` where another element was already taken out.
  */
-function liftTelemetryAndDao(
+export function liftTelemetryAndDao(
   s: string,
   joins: readonly number[] = [],
-): { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string } {
+): { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; cuts: number[] } {
   const tel = findCommentTelemetry(s);
   let dao: DaoFound | undefined;
   for (let p = s.length - 5; p >= 0; p--) {
@@ -668,7 +677,14 @@ function liftTelemetryAndDao(
   const ranges: [number, number][] = [];
   if (tel) ranges.push([tel.start, tel.end]);
   if (dao) ranges.push([dao.start, dao.start + 5]);
-  const out: { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string } = { rest: removeRanges(s, ranges) };
+  // Where, in the text left, something was taken out.
+  let removed = 0;
+  const cuts: number[] = [];
+  for (const [a, b] of [...ranges].sort((x, y) => x[0] - y[0])) {
+    cuts.push(a - removed);
+    removed += b - a;
+  }
+  const out: { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; cuts: number[] } = { rest: removeRanges(s, ranges), cuts };
   if (tel) out.telemetry = tel.telemetry;
   if (dao) out.dao = dao;
   return out;
@@ -678,7 +694,7 @@ const ALTITUDE_RE = /\/A=(-[0-9]{5}|[0-9]{6})/;
 
 /** Lifts the structured elements out of a comment, in the order the vectors' README gives. */
 function liftComment(ctx: DecodeContext, text: string, options: LiftOptions): Lifted {
-  const first = liftTelemetryAndDao(text, options.joins);
+  const first = options.pre ? { ...options.pre, rest: text } : liftTelemetryAndDao(text, options.joins);
   const lifted: Lifted = { rest: first.rest };
   if (first.telemetry) lifted.telemetry = first.telemetry;
   if (first.dao) lifted.dao = first.dao;
@@ -857,6 +873,12 @@ function parseWeatherFields(ctx: DecodeContext, s: string, j: number, options: W
           j += 4;
           continue;
         }
+        // Exactly three spaces is a snowfall sent as unknown, as for any other field.
+        if (v === '   ') {
+          seen.add(key);
+          j += 4;
+          continue;
+        }
         // Only a run of dots may be shorter than three, and only when no digit follows it: s..6 is
         // not a field, so the fields end there.
         const dots = /^\.{1,3}/.exec(v)?.[0];
@@ -961,7 +983,7 @@ function weatherTail(
   rest: string,
   positioned: boolean,
 ): { comment?: string; telemetry?: CommentTelemetry; dao?: DaoFound } {
-  const lifted = positioned ? liftTelemetryAndDao(rest) : { rest };
+  const lifted: PreLifted = positioned ? liftTelemetryAndDao(rest) : { rest };
   const out: { comment?: string; telemetry?: CommentTelemetry; dao?: DaoFound } = {};
   if (lifted.telemetry) out.telemetry = lifted.telemetry;
   if (lifted.dao) out.dao = lifted.dao;
@@ -1118,7 +1140,8 @@ function applyLifted(ctx: DecodeContext, f: Fields, lifted: Lifted): void {
 const STORM_TYPES: Record<string, StormType> = { TS: 'tropical-storm', HC: 'hurricane', TD: 'tropical-depression' };
 
 function parseStorm(s: string): { storm: Storm; length: number } | undefined {
-  const m = /^\/(TS|HC|TD)\/([0-9 .]{3})\^([0-9 .]{3})\/([0-9 .]{4})>([0-9 .]{3})&([0-9 .]{3})(?:%([0-9 .]{3}))?/.exec(s);
+  // Each field is digits (vectors object-item/storm-data-with-a-space-in-a-field-is-text).
+  const m = /^\/(TS|HC|TD)\/([0-9]{3})\^([0-9]{3})\/([0-9]{4})>([0-9]{3})&([0-9]{3})(?:%([0-9]{3}))?/.exec(s);
   if (!m) return undefined;
   const num = (v: string | undefined): number | undefined => (v !== undefined && /^[0-9]+$/.test(v) ? Number(v) : undefined);
   const storm: { -readonly [K in keyof Storm]: Storm[K] } = { type: STORM_TYPES[m[1]!]! };
@@ -1190,11 +1213,12 @@ export function liftMicEComment(
   text: string,
   symbol: AprsSymbol,
   extension: ExtensionFound | undefined,
-  joins: readonly number[],
+  pre: PreLifted,
+  atStart = true,
 ): { lifted: Lifted } {
   const options: LiftOptions = extension
-    ? { extensionFound: true, extension, symbol, joins }
-    : { extensionFound: false, extensionAtStart: true, symbol, joins };
+    ? { extensionFound: true, extension, symbol, pre }
+    : { extensionFound: false, extensionAtStart: atStart, symbol, pre };
   return { lifted: liftComment(ctx, text, options) };
 }
 

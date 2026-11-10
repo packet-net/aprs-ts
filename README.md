@@ -133,7 +133,9 @@ console.log(station.telemetry(5, [199, 0, 255, 73, 123], '01101001').toTnc2()); 
 console.log(station.micE(51.5, -0.1234).symbol(Symbols.car).micEMessage('en-route').speed(20).course(90).toTnc2()); // M0LTE>UQ3PPP:`v_Dn v>/`
 ```
 
-Anything the spec does not allow is refused when you build it, with an `AprsEncodeError` saying why: message text over 67 characters, an object name with a trailing space, two data extensions at once. Free text is checked by decoding what was written, so a comment that would read back as something else (an altitude, a PHG code, a `!DAO!`) gets a `/` delimiter in front if that fixes it, and is refused if not.
+The builder takes values as an application has them: a course of 0 is unknown, as APRS has it (360 is north), so it is `000` in an uncompressed report, no course in Mic-E, and refused in a compressed report; `speedKmh()` and `altitudeMetres()` take km/h and metres beside knots and feet, and weather may be given in Celsius (`temperatureC`) and millimetres (`rain1hMm`, `rain24hMm`, `rainMidnightMm`) as well as Fahrenheit and inches. Each value is rounded once, to the nearest step its field holds. A Mic-E altitude in metres goes in the Mic-E altitude bytes, whose unit is the metre; one in feet goes in a `/A=`. A telemetry sequence given as a number is 0-999.
+
+Anything the spec does not allow is refused when you build it, with an `AprsEncodeError` saying why: message text over 67 characters, an object name with a trailing space, two data extensions at once. Free text is checked by decoding what was written, so a comment that would read back as something else (an altitude, a PHG code, a `!DAO!`) gets a `/` delimiter (or a space) in front if that fixes it, and is refused if not.
 
 ```ts
 import { Aprs, AprsEncodeError } from '@packet-net/pdn-aprs';
@@ -174,15 +176,17 @@ console.log(identifyTocall('APDW18')?.model); // DireWolf
 
 ## Conformance
 
-The conformance vectors are a git submodule at `vectors/`. The test suite runs every case with every check the vectors' README defines (the lenient result, the strict result, the single-tolerance check, re-encoding, and the encode cases), one test per check per case: 6,015 tests, all passing. A check this implementation could not pass would be listed in `test/known-differences.json` with the reason and skipped; the list is empty.
+The conformance vectors are a git submodule at `vectors/`. The test suite runs every case with every check the vectors' README defines (the lenient result, the strict result, the single-tolerance check, re-encoding, and the encode cases), one test per check per case: 6,137 tests, all passing. A check this implementation could not pass would be listed in `test/known-differences.json` with the reason and skipped; the list is empty.
 
-`scripts/diff-dump.mjs` writes the differential dump that the vectors' `tools/compare.py` reads, for comparing implementations over a whole capture:
+`scripts/diff-dump.mjs` writes the differential dumps that the vectors' `tools/compare.py` reads, for comparing implementations (the vectors' README, "Comparing implementations"): decoding a capture or fuzzed packets (the default, with the bytes the encoder writes and the API view), encoding data in the neutral form (`--encode`), and building packets from recipes (`--build`):
 
 ```sh
 git submodule update --init
 npm ci && npm run build
 node scripts/diff-dump.mjs lines.hex.gz ts.jsonl.gz
-python3 vectors/tools/compare.py ts.jsonl.gz other.jsonl.gz --names TS Other --lines lines.hex.gz
+node scripts/diff-dump.mjs --encode data.jsonl.gz ts-encode.jsonl.gz
+node scripts/diff-dump.mjs --build recipes.jsonl.gz ts-build.jsonl.gz
+python3 vectors/tools/compare.py ts.jsonl.gz other.jsonl.gz --names TS Other --input lines.hex.gz
 ```
 
 The examples in this README run as tests too (`test/readme.test.ts`).

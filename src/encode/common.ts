@@ -19,10 +19,26 @@ export function pad(n: number, width: number): string {
   return String(n).padStart(width, '0');
 }
 
-/** A whole number within [min, max], else refused. */
+/**
+ * The nearest whole number, halves away from zero, as the vectors' rules round wherever they say
+ * "nearest" (`Math.round` takes a half towards +infinity, so -2.5 to -2). A value within 1e-6 of a
+ * half is the half: decimal text such as 58.585 is seldom exactly that in binary, and the half the
+ * text means wins (vectors rulings, F2).
+ */
+export function nearest(value: number): number {
+  const abs = Math.abs(value);
+  const below = Math.floor(abs);
+  const n = abs - below >= 0.5 - HALF_TOLERANCE ? below + 1 : below;
+  return value < 0 ? -n : n;
+}
+
+/** How near a half, in steps, a value is taken for the half. */
+const HALF_TOLERANCE = 1e-6;
+
+/** A whole number within [min, max], else refused; a fraction is rounded to the nearest. */
 export function whole(value: number, min: number, max: number, what: string): number {
   if (!Number.isFinite(value)) refuse(`${what} is not a number`);
-  const n = Math.round(value);
+  const n = nearest(value);
   if (n < min || n > max) refuse(`${what} ${value} is out of range (${min}-${max})`);
   return n;
 }
@@ -80,8 +96,22 @@ export function base91(value: number, width: number): string {
   return out;
 }
 
-/** Formats a number as short text: `0.53`, `-32`, `1e-7`. */
+/**
+ * A number as plain decimal text: the shortest that reads back as the same number, with no
+ * exponent and no `+`, a `0` before a leading point and no trailing `.0` (`0.53`, `-94`, 1e61 as
+ * `1` and 61 zeros, 1e-7 as `0.0000001`; vectors rulings, F11).
+ */
 export function numberText(v: number): string {
   if (!Number.isFinite(v)) refuse('a value is not a number');
-  return String(v);
+  if (Object.is(v, -0)) return '0';
+  const shortest = String(v);
+  const m = /^(-?)([0-9])(?:\.([0-9]+))?e([+-][0-9]+)$/.exec(shortest);
+  if (!m) return shortest;
+  const sign = m[1]!;
+  const digits = m[2]! + (m[3] ?? '');
+  // The point sits after the first digit; the exponent moves it.
+  const point = 1 + Number(m[4]);
+  if (point <= 0) return `${sign}0.${'0'.repeat(-point)}${digits}`;
+  if (point >= digits.length) return sign + digits + '0'.repeat(point - digits.length);
+  return `${sign}${digits.slice(0, point)}.${digits.slice(point)}`;
 }
