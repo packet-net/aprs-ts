@@ -375,10 +375,11 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
       text = text.slice(0, later.index) + text.slice(later.index + 4);
       join = later.index;
     } else if (!ctx.options.tolerates('mic-e-altitude-not-first')) {
-      // Left as text, the altitude is looked for before the !DAO! is lifted, and lifting it must
-      // not join the bytes either side into another one (vectors README, Mic-E).
+      // A later altitude declined is left as text; lifting the !DAO! must then not join the bytes
+      // either side into another one. With no later altitude, strict reads as lenient (vectors
+      // README, Mic-E).
       const joined = /([!-{]{3})\}/.exec(liftTelemetryAndDao(text).rest);
-      if (joined && (!later || joined[0] !== later[0])) ctx.fail('mic-e-altitude-not-first');
+      if (later && joined && joined[0] !== later[0]) ctx.fail('mic-e-altitude-not-first');
     }
   }
   if (altitudeFeet !== undefined) f.altitudeFeet = altitudeFeet;

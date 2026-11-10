@@ -535,7 +535,9 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
 
 function stormText(s: NonNullable<PositionedFields['storm']>): string {
   const type = s.type === 'tropical-storm' ? 'TS' : s.type === 'hurricane' ? 'HC' : s.type === 'tropical-depression' ? 'TD' : refuse('unknown storm type');
-  const v = (n: number | undefined, width: number, what: string): string => (n === undefined ? ' '.repeat(width) : pad(whole(n, 0, 10 ** width - 1, what), width));
+  // Each field is digits: one with no value has no form (vectors README, storm data).
+  const v = (n: number | undefined, width: number, what: string): string =>
+    n === undefined ? refuse(`storm data needs its ${what}`) : pad(whole(n, 0, 10 ** width - 1, what), width);
   let out = `/${type}/${v(s.sustainedWindKnots, 3, 'sustained wind')}^${v(s.gustKnots, 3, 'gust')}/${v(s.centralPressureMbar, 4, 'pressure')}>${v(s.hurricaneRadiusNm, 3, 'radius')}&${v(s.tropicalStormRadiusNm, 3, 'radius')}`;
   if (s.wholeGaleRadiusNm !== undefined) out += `%${v(s.wholeGaleRadiusNm, 3, 'radius')}`;
   return out;

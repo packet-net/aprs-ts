@@ -1133,7 +1133,8 @@ function applyLifted(ctx: DecodeContext, f: Fields, lifted: Lifted): void {
 const STORM_TYPES: Record<string, StormType> = { TS: 'tropical-storm', HC: 'hurricane', TD: 'tropical-depression' };
 
 function parseStorm(s: string): { storm: Storm; length: number } | undefined {
-  const m = /^\/(TS|HC|TD)\/([0-9 .]{3})\^([0-9 .]{3})\/([0-9 .]{4})>([0-9 .]{3})&([0-9 .]{3})(?:%([0-9 .]{3}))?/.exec(s);
+  // Each field is digits (vectors object-item/storm-data-with-a-space-in-a-field-is-text).
+  const m = /^\/(TS|HC|TD)\/([0-9]{3})\^([0-9]{3})\/([0-9]{4})>([0-9]{3})&([0-9]{3})(?:%([0-9]{3}))?/.exec(s);
   if (!m) return undefined;
   const num = (v: string | undefined): number | undefined => (v !== undefined && /^[0-9]+$/.test(v) ? Number(v) : undefined);
   const storm: { -readonly [K in keyof Storm]: Storm[K] } = { type: STORM_TYPES[m[1]!]! };
