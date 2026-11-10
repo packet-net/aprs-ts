@@ -21,6 +21,7 @@ import type {
 import { base91, checkSymbol, freeText, isValidTimestamp, nearest, pad, refuse, timestamp7, whole } from './common.js';
 
 const EPS = 1e-9;
+const CUT_TOLERANCE = 1e-6;
 
 /** Negative, or negative zero: a zero coordinate keeps its hemisphere as the sign of zero. */
 export function isNegative(v: number): boolean {
@@ -46,9 +47,11 @@ interface Digits {
 type DigitsMode = 'round' | 'truncate' | 'thousandths' | 'base91';
 
 /** Degrees and hundredths of a minute, and the `!DAO!` digit below them. */
-function digitsOf(value: number, mode: DigitsMode): Digits {
+function digitsOf(value: number, mode: DigitsMode, ambiguity = 0): Digits {
   const abs = Math.abs(value);
-  let degrees = Math.floor(abs + EPS);
+  // The ambiguity cut takes F2's tolerance: a value within 1e-6 of the box edge above it, in the
+  // box's units, is on that edge (vectors rulings, G2).
+  let degrees = Math.floor(abs + (mode === 'truncate' && ambiguity >= 4 ? CUT_TOLERANCE : EPS));
   const minutes = Math.max(0, (abs - degrees) * 60);
   let hundredths: number;
   let extra = 0;
@@ -56,9 +59,12 @@ function digitsOf(value: number, mode: DigitsMode): Digits {
     case 'round':
       hundredths = nearest(minutes * 100);
       break;
-    case 'truncate':
-      hundredths = Math.floor(minutes * 100 + EPS);
+    case 'truncate': {
+      // Hundredths of a minute in each box: a tenth, a minute, ten minutes, or a whole degree.
+      const box = ambiguity >= 4 ? 6000 : ambiguity === 3 ? 1000 : ambiguity === 2 ? 100 : ambiguity === 1 ? 10 : 1;
+      hundredths = ambiguity >= 4 ? 0 : Math.floor((minutes * 100) / box + (ambiguity > 0 ? CUT_TOLERANCE : EPS)) * box;
       break;
+    }
     case 'thousandths': {
       const steps = nearest(minutes * 1000);
       hundredths = Math.floor(steps / 10);
@@ -100,8 +106,8 @@ function uncompressedPosition(f: PositionedFields): { text: string; latExtra: nu
   if (!Number.isInteger(ambiguity) || ambiguity < 0 || ambiguity > 4) refuse('ambiguity is 0-4 digits');
   checkSymbol(f.symbol);
   const mode = digitsMode(f);
-  const lat = digitsOf(f.latitude, mode);
-  const lon = digitsOf(f.longitude, mode);
+  const lat = digitsOf(f.latitude, mode, ambiguity);
+  const lon = digitsOf(f.longitude, mode, ambiguity);
   if (lat.degrees > 90 || (lat.degrees === 90 && lat.hundredths > 0)) refuse('latitude is out of range');
   if (lon.degrees > 180 || (lon.degrees === 180 && lon.hundredths > 0)) refuse('longitude is out of range');
   const latMin = pad(Math.floor(lat.hundredths / 100), 2) + '.' + pad(lat.hundredths % 100, 2);
@@ -176,23 +182,26 @@ function compressedDirection(degrees: number): string {
 }
 
 /**
- * A speed in knots in the cs bytes: 1.08^s - 1, the nearest s, which may be 90 (`{`). A small
- * negative speed that rounds to 0 is 0 (vectors rulings, F2).
+ * A speed in knots in the cs bytes: 1.08^s - 1, the nearest s for any whole s, refused when that
+ * s is outside the byte (0-90; 90 is `{`), so -0.03 knots is 0 and -0.3 is refused (vectors
+ * rulings, G3).
  */
 function compressedSpeed(knots: number, what: string): string {
-  if (!Number.isFinite(knots) || nearest(knots) < 0) refuse(`${what} is negative`);
-  const s = knots <= 0 ? 0 : nearest(Math.log(knots + 1) / Math.log(1.08));
+  if (!(knots > -1)) refuse(`${what} has no compressed form`);
+  const s = nearest(Math.log(knots + 1) / Math.log(1.08));
+  if (s < 0) refuse(`${what} is negative`);
   if (s > 90) refuse(`${what} is too high for the compressed format`);
   return String.fromCharCode(s + 33);
 }
 
 /**
- * A range in the cs bytes: `{` and 2 x 1.08^s miles, the nearest s. A range under 2 miles has no
- * place there at all (vectors interpretations.md, "Re-encoding into compressed bytes rounds").
+ * A range in the cs bytes: `{` and 2 x 1.08^s miles, the nearest s for any whole s, refused when
+ * that s is below 0, so 1.95 miles is 2 and 1.9 is refused (vectors rulings, G3).
  */
 function compressedRange(miles: number): string {
-  if (!(miles >= 2)) refuse('a compressed range is at least 2 miles');
+  if (!(miles > 0)) refuse('a compressed range is at least 2 miles');
   const s = nearest(Math.log(miles / 2) / Math.log(1.08));
+  if (s < 0) refuse('a compressed range is at least 2 miles');
   if (s > 90) refuse('range is out of range for the compressed format');
   return '{' + String.fromCharCode(s + 33);
 }
@@ -691,8 +700,8 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   const ambiguity = d.ambiguity ?? 0;
   if (!Number.isInteger(ambiguity) || ambiguity < 0 || ambiguity > 4) refuse('ambiguity is 0-4 digits');
   const digits = digitsMode(d);
-  const lat = digitsOf(d.latitude, digits);
-  const lon = digitsOf(d.longitude, digits);
+  const lat = digitsOf(d.latitude, digits, ambiguity);
+  const lon = digitsOf(d.longitude, digits, ambiguity);
   if (lat.degrees > 90 || (lat.degrees === 90 && lat.hundredths > 0)) refuse('latitude is out of range');
   if (lon.degrees > 179) refuse('Mic-E longitude is below 180 degrees');
   const destination = micEDestination(d, lat, lon.degrees);

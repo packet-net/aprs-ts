@@ -308,3 +308,10 @@ describe('Mic-E status text (vectors README, Mic-E)', () => {
     expect(p.diagnostics).toEqual([]);
   });
 });
+
+describe('ambiguity cut (vectors rulings, G2)', () => {
+  it('takes a value within 1e-6 of the box edge as on it', () => {
+    const line = Aprs.from('N0CALL').position(80.49, -72.75).ambiguity(1).toTnc2();
+    expect(line.slice(line.indexOf(':') + 1)).toBe('!8029.4 N/07245.0 W/');
+  });
+});
