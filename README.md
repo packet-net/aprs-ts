@@ -87,8 +87,8 @@ const packet = Aprs.from('M0LTE-9')
   .via('WIDE1-1', 'WIDE2-1')
   .position(51.45, -0.98)
   .symbol(Symbols.car)
-  .course(88)
-  .speed(36)
+  .courseDegrees(88)
+  .speedKnots(36)
   .comment('Mobile')
   .build();
 
@@ -105,7 +105,7 @@ import { Aprs, Symbols } from '@packet-net/pdn-aprs';
 const station = Aprs.from('M0LTE');
 
 // A message wanting an ack, and the ack
-console.log(station.message('G4ABC', 'Meet at the club at 8?').id(42).toTnc2()); // M0LTE>APZ001::G4ABC    :Meet at the club at 8?{42
+console.log(station.message('G4ABC', 'Meet at the club at 8?').messageId(42).toTnc2()); // M0LTE>APZ001::G4ABC    :Meet at the club at 8?{42
 console.log(station.ack('G4ABC', '7').toTnc2()); // M0LTE>APZ001::G4ABC    :ack7
 
 // Status, with a locator and symbol
@@ -121,21 +121,27 @@ console.log(
     .toTnc2(),
 ); // M0LTE>APZ001:;NET      *261930z5130.00N/00006.00W+Net control
 
-// Weather at a position
+// Weather at a position (give no position for the positionless form, which is not recommended)
 console.log(
   station
-    .weather(51.45, -0.98, { windDirectionDegrees: 220, windSpeedMph: 4, windGustMph: 5, temperatureF: 61, humidityPercent: 80, pressureMbar: 1013.2 })
+    .weather(
+      { windDirectionDegrees: 220, windSpeedMph: 4, windGustMph: 5, temperatureF: 61, humidityPercent: 80, pressureMbar: 1013.2 },
+      { latitude: 51.45, longitude: -0.98 },
+    )
     .toTnc2(),
 ); // M0LTE>APZ001:!5127.00N/00058.80W_220/004g005t061h80b10132
 
+// Telemetry metadata goes to the station itself unless you name another
+console.log(station.telemetryNames(['Battery', 'Temp']).toTnc2()); // M0LTE>APZ001::M0LTE    :PARM.Battery,Temp
+
 // Telemetry, and a Mic-E position (which computes its destination address)
 console.log(station.telemetry(5, [199, 0, 255, 73, 123], '01101001').toTnc2()); // M0LTE>APZ001:T#005,199,000,255,073,123,01101001
-console.log(station.micE(51.5, -0.1234).symbol(Symbols.car).micEMessage('en-route').speed(20).course(90).toTnc2()); // M0LTE>UQ3PPP:`v_Dn v>/`
+console.log(station.micE(51.5, -0.1234).symbol(Symbols.car).micEMessage('en-route').speedKnots(20).courseDegrees(90).toTnc2()); // M0LTE>UQ3PPP:`v_Dn v>/`
 ```
 
-The builder takes values as an application has them: a course of 0 is unknown, as APRS has it (360 is north), so it is `000` in an uncompressed report, no course in Mic-E, and refused in a compressed report; `speedKmh()` and `altitudeMetres()` take km/h and metres beside knots and feet, and weather may be given in Celsius (`temperatureC`) and millimetres (`rain1hMm`, `rain24hMm`, `rainMidnightMm`) as well as Fahrenheit and inches. Each value is rounded once, to the nearest step its field holds. A Mic-E altitude in metres goes in the Mic-E altitude bytes, whose unit is the metre; one in feet goes in a `/A=`. A telemetry sequence given as a number is 0-999.
+The builder takes values as an application has them: a course of 0 is unknown, as APRS has it (360 is north), so it is `000` in an uncompressed report, no course in Mic-E, and refused in a compressed report; `speedKmh()` and `altitudeM()` take km/h and metres beside `speedKnots()` and `altitudeFeet()` (a setter has the name of the field it fills), and weather may be given in Celsius (`temperatureC`) and millimetres (`rain1hMm`, `rain24hMm`, `rainMidnightMm`) instead of Fahrenheit and inches: the type refuses a value given in both units, and `build()` does too for a caller the type does not stop. Each value is rounded once, to the nearest step its field holds. A Mic-E altitude in metres goes in the Mic-E altitude bytes, whose unit is the metre; one in feet goes in a `/A=`, which the data records as `altitudeInComment` so encoding a copy of the data writes the same bytes. A telemetry sequence given as a number is 0-999.
 
-Anything the spec does not allow is refused when you build it, with an `AprsEncodeError` saying why: message text over 67 characters, an object name with a trailing space, two data extensions at once. Free text is checked by decoding what was written, so a comment that would read back as something else (an altitude, a PHG code, a `!DAO!`) gets a `/` delimiter (or a space) in front if that fixes it, and is refused if not.
+Anything the spec does not allow is refused when you build it, with an `AprsEncodeError` saying why: an address APRS-IS does not allow in the header, a weather value given in two units, message text over 67 characters, an object name with a trailing space, two data extensions at once. Free text is checked by decoding what was written, so a comment that would read back as something else (an altitude, a PHG code, a `!DAO!`) gets a `/` delimiter (or a space) in front if that fixes it, and is refused if not.
 
 ```ts
 import { Aprs, AprsEncodeError } from '@packet-net/pdn-aprs';
@@ -147,7 +153,23 @@ try {
 }
 ```
 
-The encoder also works on data directly: `encodeInformation(data)` returns the information field bytes (and for Mic-E the destination), and `encodeTnc2` / `encodeAx25` a whole packet. Decoding and encoding again round-trips: data from the decoder encodes back to the same bytes, or to bytes that decode to the same data, or is refused when there are none. It is never written as bytes that read back as different data, apart from wind or a range going back into a compressed position's cs bytes, which carry them in steps.
+The encoder also works on data directly: `encodeInformation(data)` returns the `information` field bytes (and for Mic-E the `destination`), and `encodeTnc2` / `encodeAx25` a whole packet. Decoding and encoding again round-trips: data from the decoder encodes back to the same bytes, or to bytes that decode to the same data, or is refused when there are none. It is never written as bytes that read back as different data, apart from wind or a range going back into a compressed position's cs bytes, which carry them in steps.
+
+## Writing out a received packet
+
+A decoded packet keeps the information field as received, so a digipeater or IGate can pass it on without re-encoding it. `packetToTnc2(packet)` and `packetToTnc2Bytes(packet)` give the TNC2 line, and `packetToAx25(packet)` the AX.25 UI frame (it throws `AprsEncodeError` for an address AX.25 cannot carry as sent, such as an SSID written `-00`). `hasErrors` and `hasWarnings` summarise the diagnostics, and `phgValues` turns a PHG's codes into watts, feet, dB and degrees.
+
+```ts
+import { decodeTnc2, hasWarnings, packetToAx25, packetToTnc2, phgValues } from '@packet-net/pdn-aprs';
+
+const packet = decodeTnc2('N1EOE>APN391,N1NCI-3*,WIDE2-1:!4216.95N/07243.20W#PHG6230 Easthampton MA');
+console.log(packetToTnc2(packet)); // N1EOE>APN391,N1NCI-3*,WIDE2-1:!4216.95N/07243.20W#PHG6230 Easthampton MA
+console.log(packetToAx25(packet).length); // 72
+console.log(hasWarnings(packet)); // false
+if (packet.data.type === 'position' && packet.data.phg) {
+  console.log(phgValues(packet.data.phg).watts); // 36
+}
+```
 
 ## Symbols
 
@@ -177,6 +199,8 @@ console.log(identifyTocall('APDW18')?.model); // DireWolf
 ## Conformance
 
 The conformance vectors are a git submodule at `vectors/`. The test suite runs every case with every check the vectors' README defines (the lenient result, the strict result, the single-tolerance check, re-encoding, and the encode cases), one test per check per case: 6,137 tests, all passing. A check this implementation could not pass would be listed in `test/known-differences.json` with the reason and skipped; the list is empty.
+
+The vectors' neutral form is not part of the public API: the tests and `scripts/diff-dump.mjs` read it from `src/neutral.ts` and `dist/neutral.js`.
 
 `scripts/diff-dump.mjs` writes the differential dumps that the vectors' `tools/compare.py` reads, for comparing implementations (the vectors' README, "Comparing implementations"): decoding a capture or fuzzed packets (the default, with the bytes the encoder writes and the API view), encoding data in the neutral form (`--encode`), and building packets from recipes (`--build`):
 
