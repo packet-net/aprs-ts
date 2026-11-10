@@ -866,6 +866,12 @@ function parseWeatherFields(ctx: DecodeContext, s: string, j: number, options: W
           j += 4;
           continue;
         }
+        // Exactly three spaces is a snowfall sent as unknown, as for any other field.
+        if (v === '   ') {
+          seen.add(key);
+          j += 4;
+          continue;
+        }
         // Only a run of dots may be shorter than three, and only when no digit follows it: s..6 is
         // not a field, so the fields end there.
         const dots = /^\.{1,3}/.exec(v)?.[0];
