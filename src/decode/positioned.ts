@@ -662,7 +662,7 @@ function removeRanges(s: string, ranges: readonly [number, number][]): string {
 export function liftTelemetryAndDao(
   s: string,
   joins: readonly number[] = [],
-): { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string } {
+): { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; cuts: number[] } {
   const tel = findCommentTelemetry(s);
   let dao: DaoFound | undefined;
   for (let p = s.length - 5; p >= 0; p--) {
@@ -677,7 +677,14 @@ export function liftTelemetryAndDao(
   const ranges: [number, number][] = [];
   if (tel) ranges.push([tel.start, tel.end]);
   if (dao) ranges.push([dao.start, dao.start + 5]);
-  const out: { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string } = { rest: removeRanges(s, ranges) };
+  // Where, in the text left, something was taken out.
+  let removed = 0;
+  const cuts: number[] = [];
+  for (const [a, b] of [...ranges].sort((x, y) => x[0] - y[0])) {
+    cuts.push(a - removed);
+    removed += b - a;
+  }
+  const out: { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; cuts: number[] } = { rest: removeRanges(s, ranges), cuts };
   if (tel) out.telemetry = tel.telemetry;
   if (dao) out.dao = dao;
   return out;
@@ -976,7 +983,7 @@ function weatherTail(
   rest: string,
   positioned: boolean,
 ): { comment?: string; telemetry?: CommentTelemetry; dao?: DaoFound } {
-  const lifted = positioned ? liftTelemetryAndDao(rest) : { rest };
+  const lifted: PreLifted = positioned ? liftTelemetryAndDao(rest) : { rest };
   const out: { comment?: string; telemetry?: CommentTelemetry; dao?: DaoFound } = {};
   if (lifted.telemetry) out.telemetry = lifted.telemetry;
   if (lifted.dao) out.dao = lifted.dao;
