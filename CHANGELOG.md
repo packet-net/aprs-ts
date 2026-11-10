@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased
+
+The 1.0 API cleanup. Everything below that is marked breaking is removed or renamed outright, with no deprecated alias left behind. The decoder and encoder are unchanged: the 100,000-line encode and build differential dumps and the decode dump over the 1,831 cases agree line for line with 0.3.0.
+
+### Breaking changes
+
+Builder setters take the name of the field they fill, with the unit in it:
+
+- `.course(d)` is `.courseDegrees(d)`; `.speed(k)` is `.speedKnots(k)`; `.altitude(f)` is `.altitudeFeet(f)`; `.altitudeMetres(m)` is `.altitudeM(m)`; `.range(m)` is `.rangeMiles(m)`; `.speedKmh()` is unchanged.
+- `.commentTelemetry(...)` is `.telemetry(...)`, like the `telemetry` field it fills.
+- `PacketBuilder.telemetry(sequence, ...)` takes a number 0-999 only; a text sequence is still possible through hand-built data (`Aprs.from(...).data(...)`).
+- `MicEBuilder.old()` is `.oldData()`; `MessageBuilder.id()` is `.messageId()`.
+
+Weather and telemetry builders:
+
+- `weather(lat, lon, w)` and `weatherReport(w, at)` are one method: `weather(w, { latitude, longitude, at? })` for a report with a position, `weather(w, { at? })` for a positionless one (`at` defaults to now).
+- `telemetryNames`, `telemetryUnits`, `telemetryCoefficients` and `telemetryBits` take the addressee last, and it defaults to the sending station: `telemetryNames(names, addressee?)`, `telemetryUnits(units, addressee?)`, `telemetryCoefficients(coefficients, addressee?)`, `telemetryBits(bits, project?, addressee?)`.
+- `WeatherInput` is exclusive per unit pair in the type: `{ temperatureF: 61, temperatureC: 16 }` no longer compiles (likewise `rain1hIn`/`rain1hMm`, `rain24hIn`/`rain24hMm`, `rainMidnightIn`/`rainMidnightMm`). A decoded `Weather` is still accepted. A caller the type does not stop gets the same `AprsEncodeError`, now thrown from `build()` and not from the middle of the chain.
+
+Building and refusal:
+
+- `build()` checks the source, destination and path addresses (APRS-IS form) and throws `AprsEncodeError` there. A `BuiltPacket` can always be written; its `toTnc2()`, `toTnc2Bytes()`, `toAx25()` and `toKiss()` reuse the stored information field and add only their own limits (AX.25 address form and 8 digipeaters; UTF-8 for `toTnc2()`).
+- `BuiltPacket.path` is `readonly PathEntry[]` (`{ address, used }`), like `AprsPacket.path`; `via()` accepts `string | PathEntry` (a trailing `*` marks a string entry used).
+- The builder classes (`PacketBuilder`, `PositionBuilder`, `ObjectBuilder`, `ItemBuilder`, `MicEBuilder`, `MessageBuilder`, `StatusBuilder`, `TelemetryBuilder`, `DataBuilder`) are exported as types only; start with `Aprs.from()`. They cannot be constructed or used with `instanceof`.
+
+Data and decoding:
+
+- `EncodedInformation.info` is `information`, and both fields are readonly.
+- `decodeInformation(information, destination, options = ParseOptions.lenient)`: `options` is optional, and `DecodedInformation` has readonly fields.
+- `MicEReport` gains `altitudeInComment`: set by the decoder when the altitude came from a `/A=` in the status text, honoured by the encoder, and not part of the vectors' neutral form. It replaces the hidden state the builder used, so encoding a copy of a built packet's data writes the same bytes.
+
+Removed from the package root:
+
+- `toNeutralData`, `toNeutralHeader`, `toNeutralPacket`, `fromNeutralData` and `Neutral`: the vectors' form is not public API.
+- `bytesToHex`, `hexToBytes`, `encodeUtf8`, `decodeUtf8` (use `TextEncoder` and `TextDecoder`), and `diagnostic()`.
+
+### Added
+
+- `hasErrors(packet)`, `hasWarnings(packet)`, `phgValues(phg)` (`powerWatts`, `heightFeet`, `gainDb` and `directivityDegrees` from a PHG's codes), and `packetToTnc2(packet)`, `packetToTnc2Bytes(packet)` and `packetToAx25(packet)`, which write a received packet with its information field as received (`packetToAx25` throws `AprsEncodeError` for an address AX.25 cannot carry as sent).
+- `diff-dump` writes the API view keys `has_errors`, `has_warnings`, `ax25` and `phg`.
+
+### Fixed
+
+- `decodeKiss` and `unwrapKiss` document that they throw `RangeError` for a frame that is not a KISS data frame.
+- The encoder uses the exported `DEFAULT_DESTINATION`, not its own copy of `APZ001`.
+- An AX.25 frame is refused for an SSID written with a leading zero (`WB4APR-00`), which it would give back as `WB4APR`.
+
 ## 0.3.0
 
 - Brought into line with the exact-bytes batch 2 rulings (packet-net/aprs-vectors, commit f205471). Every value between the steps its field holds is rounded to the nearest, halves away from zero, a value within 1e-6 of a half (in steps) taken as the half, so a latitude of 0.9764166666666666 degrees is `0058.59N`; a `/A=` altitude is rounded to whole feet (-0.5 to `-00001`), where a fraction was refused; a snowfall is rounded to its three characters (0.995 as `001`, 9.96 as `010`); and a small negative compressed speed that rounds to s = 0 is 0.

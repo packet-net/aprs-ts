@@ -15,15 +15,13 @@ import { describe, expect, it } from 'vitest';
 import {
   AprsEncodeError,
   decodeTnc2,
-  encodeUtf8,
   encodeInformation,
   formatDiagnostic,
-  fromNeutralData,
-  hexToBytes,
   ParseOptions,
-  toNeutralData,
   type AprsPacket,
 } from '../src/index.js';
+import { encodeUtf8, hexToBytes } from '../src/bytes.js';
+import { fromNeutralData, toNeutralData } from '../src/neutral.js';
 import {
   checkStrict,
   compareResult,
@@ -75,7 +73,7 @@ function latin1(bytes: Uint8Array): string {
 function reencodeCheck(c: Case, lenient: Result): string[] {
   if ('header_error' in lenient) return ['the lenient decoder rejected the header'];
   const packet = lenient.packet;
-  let encoded: { info: Uint8Array; destination?: string };
+  let encoded: { information: Uint8Array; destination?: string };
   try {
     encoded = encodeInformation(packet.data);
   } catch (e) {
@@ -84,16 +82,16 @@ function reencodeCheck(c: Case, lenient: Result): string[] {
     }
     throw e;
   }
-  if (c.reencode === 'refused') return [`expected a refusal, wrote ${JSON.stringify(latin1(encoded.info))}`];
+  if (c.reencode === 'refused') return [`expected a refusal, wrote ${JSON.stringify(latin1(encoded.information))}`];
   // rounded: a value the format holds only in steps is rounded, so the data read back differs from
   // the original by that rounding and is not compared; the bytes are exactly canonical_info.
-  if (c.reencode === 'rounded') return canonicalCheck(c, encoded.info, true);
+  if (c.reencode === 'rounded') return canonicalCheck(c, encoded.information, true);
   const destination = encoded.destination ?? packet.destination;
   if (c.reencode === 'identical') {
     const problems: string[] = [];
     const want = sentInfo(packet);
-    if (hex(want) !== hex(encoded.info))
-      problems.push(`wrote ${JSON.stringify(latin1(encoded.info))}, sent ${JSON.stringify(latin1(want))}`);
+    if (hex(want) !== hex(encoded.information))
+      problems.push(`wrote ${JSON.stringify(latin1(encoded.information))}, sent ${JSON.stringify(latin1(want))}`);
     if (packet.data.type === 'mic-e' && destination !== packet.destination)
       problems.push(`destination ${destination}, sent ${packet.destination}`);
     return problems;
@@ -102,15 +100,15 @@ function reencodeCheck(c: Case, lenient: Result): string[] {
   // well-formed header (for Mic-E, the destination the encoder computed), so that a defect in the
   // original header is not counted against the encoder.
   const header = encodeUtf8(`${packet.source}>${encoded.destination ?? 'APZ001'}:`);
-  const line = new Uint8Array(header.length + encoded.info.length);
+  const line = new Uint8Array(header.length + encoded.information.length);
   line.set(header, 0);
-  line.set(encoded.info, header.length);
+  line.set(encoded.information, header.length);
   const again = decodeTnc2(line, ParseOptions.lenient);
   const problems = differences(toNeutralData(again.data), lenient.data, 'data');
   const bad = again.diagnostics.map(formatDiagnostic).filter((d) => !d.startsWith('info:'));
   if (bad.length > 0) problems.push(`re-decoding reported ${bad.join(', ')}`);
-  if (problems.length > 0) problems.push(`wrote ${JSON.stringify(latin1(encoded.info))}`);
-  else problems.push(...canonicalCheck(c, encoded.info, false));
+  if (problems.length > 0) problems.push(`wrote ${JSON.stringify(latin1(encoded.information))}`);
+  else problems.push(...canonicalCheck(c, encoded.information, false));
   return problems;
 }
 
@@ -128,17 +126,17 @@ function canonicalCheck(c: Case, written: Uint8Array, required: boolean): string
 
 function encodeCheck(c: Case): string[] {
   const data = fromNeutralData(c.input.encode);
-  let encoded: { info: Uint8Array; destination?: string };
+  let encoded: { information: Uint8Array; destination?: string };
   try {
     encoded = encodeInformation(data);
   } catch (e) {
     if (e instanceof AprsEncodeError) return c.expect.refused ? [] : [`the encoder refused: ${e.message}`];
     throw e;
   }
-  if (c.expect.refused) return [`expected a refusal, wrote ${JSON.stringify(latin1(encoded.info))}`];
+  if (c.expect.refused) return [`expected a refusal, wrote ${JSON.stringify(latin1(encoded.information))}`];
   const problems: string[] = [];
   const want = encodeUtf8(c.expect.info as string);
-  if (hex(want) !== hex(encoded.info)) problems.push(`wrote ${JSON.stringify(latin1(encoded.info))}, want ${JSON.stringify(latin1(want))}`);
+  if (hex(want) !== hex(encoded.information)) problems.push(`wrote ${JSON.stringify(latin1(encoded.information))}, want ${JSON.stringify(latin1(want))}`);
   if (c.expect.destination !== undefined && encoded.destination !== c.expect.destination)
     problems.push(`destination ${encoded.destination}, want ${c.expect.destination}`);
   return problems;

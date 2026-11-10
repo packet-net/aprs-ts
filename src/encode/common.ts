@@ -3,6 +3,9 @@
 import { encodeUtf8Binary } from '../bytes.js';
 import type { AprsSymbol, AprsTimestamp } from '../types.js';
 
+/** The tocall used when none is given: the experimental `APZ` range. */
+export const DEFAULT_DESTINATION = 'APZ001';
+
 /** Thrown when the encoder declines to write something the spec does not allow; says why. */
 export class AprsEncodeError extends Error {
   constructor(message: string) {

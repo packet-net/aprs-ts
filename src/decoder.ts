@@ -47,12 +47,18 @@ export function decodeAx25(frame: Uint8Array, options: ParseOptions = ParseOptio
 /**
  * Decodes a KISS frame as read from a TNC: strips any FEND delimiters, undoes FESC escaping and
  * drops the port/command byte (which must be a data frame), then decodes the AX.25 frame.
+ *
+ * @throws RangeError when the frame is not a KISS data frame; otherwise as `decodeAx25`.
  */
 export function decodeKiss(frame: Uint8Array, options: ParseOptions = ParseOptions.lenient): AprsPacket {
   return decodeAx25(unwrapKiss(frame), options);
 }
 
-/** Removes KISS framing: FEND delimiters, FESC escapes and the command byte. */
+/**
+ * Removes KISS framing: FEND delimiters, FESC escapes and the command byte.
+ *
+ * @throws RangeError when the frame is empty or its command is not a data frame.
+ */
 export function unwrapKiss(frame: Uint8Array): Uint8Array {
   let start = 0;
   let end = frame.length;
