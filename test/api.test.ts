@@ -315,3 +315,29 @@ describe('ambiguity cut (vectors rulings, G2)', () => {
     expect(line.slice(line.indexOf(':') + 1)).toBe('!8029.4 N/07245.0 W/');
   });
 });
+
+describe('run 2 rulings', () => {
+  it('writes a Mic-E comment that a / would join into an altitude after a space (E12)', () => {
+    const line = Aprs.from('N0CALL').micE(49.5, -72.75).comment('/{}').toTnc2();
+    expect(line.endsWith('` /{}')).toBe(true);
+    const back = decodeTnc2(line);
+    if (back.data.type !== 'mic-e') throw new Error(back.data.type);
+    expect(back.data.comment).toBe('/{}');
+    expect(back.data.altitudeFeet).toBeUndefined();
+  });
+
+  it('gives a third-party inner compressed range the default compression type', () => {
+    const encoded = encodeInformation({
+      type: 'third-party',
+      packet: {
+        source: 'K1ABC',
+        destination: 'APRS',
+        path: [],
+        information: new Uint8Array(0),
+        data: { type: 'position', latitude: 49.5, longitude: -72.75, symbol: { table: '/', code: '>' }, compressed: true, rangeMiles: 20 },
+        diagnostics: [],
+      },
+    });
+    expect(decodeUtf8(encoded.info)).toBe('}K1ABC>APRS:!/5L!!<*e8>{?C');
+  });
+});

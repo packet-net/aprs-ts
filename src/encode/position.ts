@@ -773,7 +773,7 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   if (d.frequency) rest += (exts > 0 && altitudeInComment === undefined && !after.endsWith('/') ? '/' : '') + frequencyText(d.frequency);
   const comment = d.comment ?? '';
   if (comment.length > 0 || mode === 'delimited') {
-    if ((rest.length > 0 && mode !== 'joined') || (mode === 'spaced' && (rest.length > 0 || after.length > 0))) rest += ' ';
+    if ((rest.length > 0 && mode !== 'joined') || mode === 'spaced') rest += ' ';
     rest += (mode === 'delimited' ? '/' : '') + freeText(comment, 'the comment');
   }
   after += rest;

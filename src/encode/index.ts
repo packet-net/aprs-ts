@@ -30,7 +30,7 @@ import {
   encodeThirdParty,
   encodeUserDefined,
 } from './other.js';
-import { encodeItem, encodeMicE, encodeObject, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
+import { DEFAULT_COMPRESSION, encodeItem, encodeMicE, encodeObject, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
 
 export { AprsEncodeError } from './common.js';
 
@@ -158,6 +158,19 @@ function expected(data: AprsData, a: Attempt): AprsData {
     if (!d.compression) d = { ...d, compression: a.compression };
   }
   if (d.type === 'mic-e' && d.speedKnots === undefined) d = { ...d, speedKnots: 0 };
+  if (d.type === 'third-party' && d.packet.information.length === 0) {
+    // An inner packet written from its data: cs values with no compression type got the default.
+    const inner = d.packet.data;
+    if ((inner.type === 'position' || inner.type === 'object' || inner.type === 'item') && inner.compressed && !inner.compression) {
+      const w = inner.weather;
+      const carries =
+        inner.courseDegrees !== undefined ||
+        inner.speedKnots !== undefined ||
+        inner.rangeMiles !== undefined ||
+        (w !== undefined && (w.windDirectionDegrees !== undefined || w.windSpeedMph !== undefined));
+      if (carries) d = { ...d, packet: { ...d.packet, data: { ...inner, compression: DEFAULT_COMPRESSION } } };
+    }
+  }
   return d;
 }
 
