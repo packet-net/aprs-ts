@@ -198,8 +198,9 @@ export function encodeInformation(data: AprsData): EncodedInformation {
   let problems = check(data, first);
   let chosen = first;
   if (problems.length > 0 && typeof (data as { comment?: unknown }).comment === 'string') {
-    // The comment would read as something else: try it straight after a frequency, then after a /.
-    for (const mode of ['joined', 'delimited'] as const) {
+    // The comment would read as something else: try it straight after a frequency, then after a
+    // /, then after a space.
+    for (const mode of ['joined', 'delimited', 'spaced'] as const) {
       let next: Attempt | undefined;
       try {
         next = attempt(data, mode);

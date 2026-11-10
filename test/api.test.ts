@@ -265,3 +265,46 @@ describe('Mic-E ambiguity (vectors README, Mic-E)', () => {
     expect(p.data.longitude).toBeCloseTo(-(95 + 22.5 / 60), 9);
   });
 });
+
+describe('builder rulings (vectors rulings, B1, B2, B6)', () => {
+  const info = (line: string): string => line.slice(line.indexOf(':') + 1);
+
+  it('takes a course of 0 as unknown', () => {
+    expect(info(Aprs.from('N0CALL').position(49.5, -72.75).course(0).speed(10).toTnc2())).toBe('!4930.00N/07245.00W/000/010');
+    const micE = Aprs.from('N0CALL').micE(49.5, -72.75).course(0.3).speed(10).build();
+    const back = decodeTnc2(micE.toTnc2());
+    if (back.data.type !== 'mic-e') throw new Error(back.data.type);
+    expect(back.data.courseDegrees).toBeUndefined();
+    expect(() => Aprs.from('N0CALL').position(49.5, -72.75).course(0).speed(10).compressed().build()).toThrow(AprsEncodeError);
+  });
+
+  it('puts Mic-E metres in the Mic-E altitude bytes and feet in a /A=', () => {
+    const metres = Aprs.from('N0CALL').micE(49.5, -72.75).altitudeMetres(100.4).build();
+    expect(decodeUtf8(metres.information)).toContain('"4{}');
+    const feet = Aprs.from('N0CALL').micE(49.5, -72.75).altitude(0).build();
+    expect(decodeUtf8(feet.information)).toContain('/A=000000');
+  });
+
+  it('converts Celsius and millimetres', () => {
+    const line = Aprs.from('N0CALL').weather(49.5, -72.75, { windDirectionDegrees: 90, windSpeedMph: 5, temperatureC: 20.3, rain1hMm: 2.54 }).toTnc2();
+    expect(info(line)).toBe('!4930.00N/07245.00W_090/005g...t069r010');
+    expect(() => Aprs.from('N0CALL').weather(49.5, -72.75, { temperatureC: 20, temperatureF: 68 }).build()).toThrow(AprsEncodeError);
+  });
+
+  it('refuses a telemetry sequence over 999', () => {
+    expect(info(Aprs.from('N0CALL').telemetry(7, [1, 2, 3, 4, 5], '00000000').toTnc2())).toBe('T#007,001,002,003,004,005,00000000');
+    expect(() => Aprs.from('N0CALL').telemetry(1000, [1, 2, 3, 4, 5], '00000000').build()).toThrow(AprsEncodeError);
+  });
+});
+
+describe('Mic-E status text (vectors README, Mic-E)', () => {
+  it('lifts a PHG after a locator before looking for an altitude', () => {
+    const p = decodeTnc2('N0CALL>S32UVT:`(_fn"Oj/`IO91SX/G PHG1060}AB');
+    if (p.data.type !== 'mic-e') throw new Error(p.data.type);
+    expect(p.data.locator).toBe('IO91SX');
+    expect(p.data.phg).toEqual({ power: 1, height: 0, gain: 6, directivity: 0 });
+    expect(p.data.altitudeFeet).toBeUndefined();
+    expect(p.data.comment).toBe('}AB');
+    expect(p.diagnostics).toEqual([]);
+  });
+});

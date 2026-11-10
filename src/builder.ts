@@ -13,7 +13,8 @@
 // `build()` encodes the packet, so anything the spec does not allow is refused there, with an
 // `AprsEncodeError` that says why.
 
-import { nearest } from './encode/common.js';
+import { nearest, refuse } from './encode/common.js';
+import { ALTITUDE_GIVEN_IN_FEET } from './encode/position.js';
 import { encodeInformation, encodeAx25, encodeTnc2, encodeTnc2Bytes, wrapKiss, type PacketToEncode } from './encode/index.js';
 import { symbolOf } from './symbols.js';
 import type {
@@ -75,6 +76,36 @@ function built(header: Header, data: AprsData): BuiltPacket {
   });
 }
 
+/**
+ * Weather as a program may have it: the units APRS sends (Fahrenheit, inches), or Celsius and
+ * millimetres, which the builder converts (vectors rulings, B2). Give each value in one unit.
+ */
+export interface WeatherInput extends Weather {
+  readonly temperatureC?: number;
+  readonly rain1hMm?: number;
+  readonly rain24hMm?: number;
+  readonly rainMidnightMm?: number;
+}
+
+const MM_PER_INCH = 25.4;
+
+/** Weather in the units APRS sends; a value in two units is refused. */
+function weatherOf(input: WeatherInput): Weather {
+  const { temperatureC, rain1hMm, rain24hMm, rainMidnightMm, ...rest } = input;
+  const w: Mutable<Weather> = { ...rest };
+  const convert = (metric: number | undefined, key: 'temperatureF' | 'rain1hIn' | 'rain24hIn' | 'rainMidnightIn', f: (v: number) => number): void => {
+    if (metric === undefined) return;
+    if (w[key] !== undefined) refuse(`weather ${key} is given in two units`);
+    w[key] = f(metric);
+  };
+  // Converted here and rounded once, when the report is written.
+  convert(temperatureC, 'temperatureF', (c) => (c * 9) / 5 + 32);
+  convert(rain1hMm, 'rain1hIn', (mm) => mm / MM_PER_INCH);
+  convert(rain24hMm, 'rain24hIn', (mm) => mm / MM_PER_INCH);
+  convert(rainMidnightMm, 'rainMidnightIn', (mm) => mm / MM_PER_INCH);
+  return w;
+}
+
 function asSymbol(symbol: AprsSymbol | string): AprsSymbol {
   return typeof symbol === 'string' ? symbolOf(symbol) : symbol;
 }
@@ -123,7 +154,7 @@ export class PacketBuilder {
   }
 
   /** A weather report at a position (the weather station symbol, unless you pick another `_`). */
-  weather(latitude: number, longitude: number, weather: Weather): PositionBuilder {
+  weather(latitude: number, longitude: number, weather: WeatherInput): PositionBuilder {
     return new PositionBuilder(this.header, latitude, longitude).symbol('/_').weather(weather);
   }
 
@@ -167,10 +198,13 @@ export class PacketBuilder {
     return new StatusBuilder(this.header, text);
   }
 
-  /** A telemetry report: sequence, five analog values and eight bits (`'01101001'`, B1 first). */
+  /**
+   * A telemetry report: sequence, five analog values and eight bits (`'01101001'`, B1 first). A
+   * sequence given as a number is 0-999, written in three digits; a larger one is refused when
+   * the packet is built, not wrapped (vectors rulings, B6).
+   */
   telemetry(sequence: number | string, analog: readonly (number | null)[], bits: string): TelemetryBuilder {
-    const seq = typeof sequence === 'number' ? String(sequence).padStart(3, '0') : sequence;
-    return new TelemetryBuilder(this.header, seq, analog, bits);
+    return new TelemetryBuilder(this.header, sequence, analog, bits);
   }
 
   /** Telemetry channel names (`PARM.`), sent to the station whose telemetry they describe. */
@@ -196,7 +230,7 @@ export class PacketBuilder {
   }
 
   /** A positionless weather report (not recommended: a weather report with a position is better). */
-  weatherReport(weather: Weather, at: Date = new Date()): DataBuilder {
+  weatherReport(weather: WeatherInput, at: Date = new Date()): DataBuilder {
     const timestamp: AprsTimestamp = {
       kind: 'mdhm',
       month: at.getUTCMonth() + 1,
@@ -204,7 +238,7 @@ export class PacketBuilder {
       hour: at.getUTCHours(),
       minute: at.getUTCMinutes(),
     };
-    return new DataBuilder(this.header, { type: 'weather', timestamp, weather });
+    return new DataBuilder(this.header, { type: 'weather', timestamp, weather: weatherOf(weather) });
   }
 
   /** Any data, built by hand. */
@@ -251,7 +285,11 @@ abstract class PositionedBuilder<Self> {
     return this.self();
   }
 
-  /** Course over the ground, degrees 1-360 (360 is north). */
+  /**
+   * Course over the ground, degrees: 360 is north and 0 is unknown, as APRS has it (vectors
+   * rulings, B1). A course of 0 is written `000` in an uncompressed report, left out of a Mic-E
+   * report, and refused in a compressed one, whose bytes have no unknown course.
+   */
   course(degrees: number): Self {
     this.fields.courseDegrees = degrees;
     return this.self();
@@ -263,23 +301,31 @@ abstract class PositionedBuilder<Self> {
     return this.self();
   }
 
-  /** Speed, km/h (sent in knots, 1.852 km/h each). */
+  /** Speed, km/h (sent in knots, 1.852 km/h each, rounded once to the knot). */
   speedKmh(kmh: number): Self {
     this.fields.speedKnots = kmh / 1.852;
     return this.self();
   }
 
-  /** Altitude, feet. */
+  /** Altitude, feet, sent as a `/A=` in whole feet (rounded to the nearest, halves away from zero). */
   altitude(feet: number): Self {
     this.fields.altitudeFeet = feet;
+    this.altitudeUnit = 'feet';
     return this.self();
   }
 
-  /** Altitude, metres (sent in feet, rounded to the nearest, halves away from zero). */
+  /**
+   * Altitude, metres: converted to feet (0.3048 m each) and rounded once for a `/A=`; a Mic-E
+   * report sends it in its own altitude bytes, whose unit is the metre, rounded to the metre.
+   */
   altitudeMetres(metres: number): Self {
-    this.fields.altitudeFeet = nearest(metres / 0.3048);
+    this.fields.altitudeFeet = metres / 0.3048;
+    this.altitudeUnit = 'metres';
     return this.self();
   }
+
+  /** The unit the altitude was given in. */
+  protected altitudeUnit: 'feet' | 'metres' | undefined;
 
   /** Free text. */
   comment(text: string): Self {
@@ -331,8 +377,8 @@ abstract class ReportBuilder<Self> extends PositionedBuilder<Self> {
   }
 
   /** Weather data (needs a weather station symbol, `_`). */
-  weather(weather: Weather): Self {
-    this.fields.weather = weather;
+  weather(weather: WeatherInput): Self {
+    this.fields.weather = weatherOf(weather);
     return this.self();
   }
 
@@ -494,6 +540,11 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
 
   build(): BuiltPacket {
     const data: Mutable<Extract<AprsData, { type: 'mic-e' }>> = { type: 'mic-e', micEMessage: this.messageValue, ...this.fields };
+    // A course of 0 (after rounding) is unknown, which Mic-E writes as 0: no course (B1).
+    if (data.courseDegrees !== undefined && Number.isFinite(data.courseDegrees) && nearest(data.courseDegrees) === 0) delete data.courseDegrees;
+    // Metres go in the Mic-E altitude bytes, to the metre; feet in a /A= (B2).
+    if (data.altitudeFeet !== undefined && this.altitudeUnit === 'metres') data.altitudeFeet = nearest(data.altitudeFeet * 0.3048) / 0.3048;
+    if (data.altitudeFeet !== undefined && this.altitudeUnit === 'feet') ALTITUDE_GIVEN_IN_FEET.add(data);
     if (this.typeCodeValue !== undefined) data.typeCode = this.typeCodeValue;
     if (this.locatorValue !== undefined) data.locator = this.locatorValue;
     if (this.oldValue) data.oldData = true;
@@ -596,7 +647,7 @@ export class TelemetryBuilder {
 
   constructor(
     private readonly header: Header,
-    private readonly sequence: string,
+    private readonly sequence: number | string,
     private readonly analog: readonly (number | null)[],
     private readonly bits: string,
   ) {}
@@ -608,9 +659,14 @@ export class TelemetryBuilder {
   }
 
   build(): BuiltPacket {
+    let sequence = this.sequence;
+    if (typeof sequence === 'number') {
+      if (!Number.isInteger(sequence) || sequence < 0 || sequence > 999) refuse(`telemetry sequence ${sequence} is not 0-999`);
+      sequence = String(sequence).padStart(3, '0');
+    }
     const data: Mutable<Extract<AprsData, { type: 'telemetry' }>> = {
       type: 'telemetry',
-      sequence: this.sequence,
+      sequence,
       analog: [...this.analog],
       bits: this.bits,
     };

@@ -308,8 +308,18 @@ const WEATHER_VALUES = {
   pressure_mbar: 'pressureMbar',
   luminosity_w_m2: 'luminosityWM2',
   snow_24h_in: 'snow24hIn',
+  temperature_c: 'temperatureC',
+  rain_1h_mm: 'rain1hMm',
+  rain_24h_mm: 'rain24hMm',
+  rain_midnight_mm: 'rainMidnightMm',
 };
-const WEATHER_UNSUPPORTED = ['temperature_c', 'rain_1h_mm', 'rain_24h_mm', 'rain_midnight_mm'];
+/** Recipe keys the builder takes in another unit beside the APRS one: given both, unsupported. */
+const WEATHER_PAIRS = [
+  ['temperature_c', 'temperature_f'],
+  ['rain_1h_mm', 'rain_1h_in'],
+  ['rain_24h_mm', 'rain_24h_in'],
+  ['rain_midnight_mm', 'rain_midnight_in'],
+];
 
 /** A recipe timestamp as the builder takes it: a Date and the form to write. */
 function when(t) {
@@ -361,8 +371,8 @@ function positioned(b, args, report) {
 }
 
 function weatherOf(args) {
-  for (const key of WEATHER_UNSUPPORTED) {
-    if (args[key] !== undefined) unsupported(key, 'the aprs-ts builder takes weather in the units APRS sends (Fahrenheit, inches)');
+  for (const [metric, aprs] of WEATHER_PAIRS) {
+    if (args[metric] !== undefined && args[aprs] !== undefined) unsupported(metric, `given with ${aprs}`);
   }
   const w = {};
   for (const [key, field] of Object.entries(WEATHER_VALUES)) if (args[key] !== undefined) w[field] = args[key];
@@ -414,7 +424,7 @@ function builderFor(recipe) {
       return b;
     }
     case 'weather': {
-      const known = new Set(['latitude', 'longitude', 'symbol', 'timestamp', ...Object.keys(WEATHER_VALUES), ...WEATHER_UNSUPPORTED]);
+      const known = new Set(['latitude', 'longitude', 'symbol', 'timestamp', ...Object.keys(WEATHER_VALUES)]);
       checkKeys(a, known, report);
       const w = weatherOf(a);
       if (a.latitude !== undefined || a.longitude !== undefined) {

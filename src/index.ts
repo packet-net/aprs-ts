@@ -54,4 +54,5 @@ export {
   DEFAULT_DESTINATION,
   timestampOf,
   type BuiltPacket,
+  type WeatherInput,
 } from './builder.js';

@@ -400,10 +400,11 @@ function hasExtension(f: PositionedFields): string[] {
 
 /**
  * How the comment is joined on: `plain` (after a space when it follows a frequency), `joined`
- * (straight after a frequency, with no space) or `delimited` (after a `/`), for when it would
- * otherwise read as something else.
+ * (straight after a frequency, with no space), `delimited` (after a `/`) or `spaced` (after a
+ * space), for when it would otherwise read as something else: a space keeps a Mic-E comment from
+ * joining a PHG's digits into an altitude, where a `/` would not (vectors README, Encoding).
  */
-export type CommentMode = 'plain' | 'joined' | 'delimited';
+export type CommentMode = 'plain' | 'joined' | 'delimited' | 'spaced';
 
 /** Encodes a position and what follows it. */
 function positionedBody(f: PositionedFields, mode: CommentMode): Body {
@@ -513,7 +514,7 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
   if (comment.length > 0 || mode === 'delimited') {
     // After a frequency (and anything after it) the free text follows a space, unless that would
     // make it read as one of the frequency's fields.
-    if (f.frequency && mode !== 'joined') text += ' ';
+    if ((f.frequency && mode !== 'joined') || mode === 'spaced') text += ' ';
     text += (mode === 'delimited' ? '/' : '') + freeText(comment, 'the comment');
   }
   if (f.telemetry) text += telemetryText(f.telemetry);
@@ -665,6 +666,12 @@ function micEDestination(d: MicEReport, lat: Digits, lonDegrees: number): string
   return out;
 }
 
+/**
+ * Mic-E reports whose altitude was given in feet by a program, so it goes in a `/A=` and not the
+ * Mic-E altitude bytes, whose unit is the metre (vectors rulings, B2).
+ */
+export const ALTITUDE_GIVEN_IN_FEET = new WeakSet<object>();
+
 export function micEAltitude(feet: number): string | undefined {
   const metres = nearest(feet * METRES_PER_FOOT);
   if (Math.abs(metres / METRES_PER_FOOT - feet) > 1e-6) return undefined;
@@ -735,7 +742,7 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   }
   let altitudeInComment: number | undefined;
   if (d.altitudeFeet !== undefined) {
-    const alt = micEAltitude(d.altitudeFeet);
+    const alt = ALTITUDE_GIVEN_IN_FEET.has(d) ? undefined : micEAltitude(d.altitudeFeet);
     if (alt !== undefined) text += alt;
     else altitudeInComment = d.altitudeFeet;
   }
@@ -757,7 +764,7 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   if (d.frequency) rest += (exts > 0 && altitudeInComment === undefined && !after.endsWith('/') ? '/' : '') + frequencyText(d.frequency);
   const comment = d.comment ?? '';
   if (comment.length > 0 || mode === 'delimited') {
-    if (rest.length > 0 && mode !== 'joined') rest += ' ';
+    if ((rest.length > 0 && mode !== 'joined') || (mode === 'spaced' && (rest.length > 0 || after.length > 0))) rest += ' ';
     rest += (mode === 'delimited' ? '/' : '') + freeText(comment, 'the comment');
   }
   after += rest;

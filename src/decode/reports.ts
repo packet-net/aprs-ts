@@ -258,6 +258,8 @@ function micEMinutes(tens: number, units: number, hundredths: number, ambiguity:
 
 const TYPE_CODES = '`\'>] ';
 
+const MIC_E_LOCATOR = /^([A-Ra-r]{2}[0-9]{2}(?:[A-Xa-x]{2})?)\/G/;
+
 /** `` ` ``, `'`, 0x1c, 0x1d: a Mic-E report. */
 export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
   // The Rev 0 beta data type identifiers are obsolete: said at the DTI, before anything is checked.
@@ -349,6 +351,7 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
   }
   let altitudeFeet: number | undefined;
   let extension: ExtensionFound | undefined;
+  let extensionAfterLocator = false;
   // Where a later altitude was taken out of the text: a !DAO! is never read across it.
   let join: number | undefined;
   const altFirst = /^([!-{]{3})\}/.exec(text);
@@ -356,10 +359,16 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     altitudeFeet = (base91Value(altFirst[1]!) - 10000) / METRES_PER_FOOT;
     text = text.slice(4);
   } else {
-    // A data extension straight after the type code is read first, so its bytes are never taken
-    // for an altitude later in the text (`0PH}` in `PHG3330PH}`).
-    extension = extensionAt(text, 0);
-    if (extension) text = text.slice(extension.length);
+    // A data extension straight after the type code, or after a locator there and its space, is
+    // read first, so its bytes are never taken for an altitude later in the text (`0PH}` in
+    // `PHG3330PH}`).
+    const loc = MIC_E_LOCATOR.exec(text);
+    const at = loc && text[loc[0].length] === ' ' ? loc[0].length + 1 : 0;
+    extension = extensionAt(text, at);
+    if (extension) {
+      text = text.slice(0, at) + text.slice(at + extension.length);
+      extensionAfterLocator = at > 0;
+    }
     const later = /([!-{]{3})\}/.exec(text);
     if (later && ctx.allows('mic-e-altitude-not-first')) {
       altitudeFeet = (base91Value(later[1]!) - 10000) / METRES_PER_FOOT;
@@ -376,7 +385,7 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
   // A locator is read only at the start of the status text, after any type code or a Mic-E
   // altitude there; after a PHG or RNG, say, it is text (vectors rulings, F17).
   let locator: string | undefined;
-  const loc = extension ? null : /^([A-Ra-r]{2}[0-9]{2}(?:[A-Xa-x]{2})?)\/G/.exec(text);
+  const loc = extension && !extensionAfterLocator ? null : MIC_E_LOCATOR.exec(text);
   if (loc) {
     locator = loc[1]!.toUpperCase();
     text = text.slice(loc[0].length);
