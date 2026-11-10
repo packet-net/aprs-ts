@@ -156,16 +156,8 @@ function expected(data: AprsData, a: Attempt): AprsData {
   let d = data;
   if ((d.type === 'position' || d.type === 'object' || d.type === 'item') && d.compressed && a.compression) {
     if (!d.compression) d = { ...d, compression: a.compression };
-    if (d.courseDegrees !== undefined && d.speedKnots === undefined) d = { ...d, speedKnots: 0 };
   }
-  if (d.type === 'mic-e') {
-    if (d.speedKnots === undefined) d = { ...d, speedKnots: 0 };
-    if (d.courseDegrees === 0) {
-      const copy: Record<string, unknown> = { ...d };
-      delete copy.courseDegrees;
-      d = copy as unknown as AprsData;
-    }
-  }
+  if (d.type === 'mic-e' && d.speedKnots === undefined) d = { ...d, speedKnots: 0 };
   return d;
 }
 
@@ -179,8 +171,22 @@ function check(data: AprsData, a: Attempt): string[] {
     return problems;
   }
   // An NMEA sentence is written as it is, so everything read from it must be what the data says.
-  shapeDifferences(toNeutralData(decoded.data), toNeutralData(expected(data, a)), '', problems, data.type === 'nmea');
+  shapeDifferences(withoutInnerInfo(toNeutralData(decoded.data)), withoutInnerInfo(toNeutralData(expected(data, a))), '', problems, data.type === 'nmea');
   return problems;
+}
+
+/**
+ * A third-party packet's neutral data without its inner packet's `info` diagnostics: an info is
+ * not a defect, so an inner packet that reads back with only those is written (vectors rulings, F10).
+ */
+function withoutInnerInfo(n: Record<string, unknown>): Record<string, unknown> {
+  const packet = n.packet as Record<string, unknown> | undefined;
+  if (n.type !== 'third-party' || !packet || !Array.isArray(packet.diagnostics)) return n;
+  const kept = (packet.diagnostics as string[]).filter((d) => !d.startsWith('info:'));
+  const copy: Record<string, unknown> = { ...packet };
+  if (kept.length > 0) copy.diagnostics = kept;
+  else delete copy.diagnostics;
+  return { ...n, packet: copy };
 }
 
 /**

@@ -2,7 +2,7 @@
 
 import { encodeUtf8 } from './bytes.js';
 import { decodeInformation } from './decode/index.js';
-import { identifyMicE, identifyTocall } from './deviceid.js';
+import { identifyDevice } from './deviceid.js';
 import { ParseOptions } from './diagnostics.js';
 import { findQConstruct, parseAx25Frame, parseTnc2Header, type ParsedHeader } from './header.js';
 import type { AprsPacket } from './types.js';
@@ -19,10 +19,7 @@ function assemble(header: ParsedHeader, options: ParseOptions): AprsPacket {
   };
   const q = findQConstruct(header.path);
   if (q) packet.qConstruct = q;
-  const device =
-    decoded.data.type === 'mic-e'
-      ? identifyMicE(decoded.data.typeCode, decoded.data.deviceSuffix)
-      : identifyTocall(header.destination);
+  const device = identifyDevice(decoded.data, header.destination);
   if (device) packet.device = device;
   return packet;
 }

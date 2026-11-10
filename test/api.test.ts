@@ -233,3 +233,35 @@ describe('encoder refusals no conformance case pins', () => {
     expect(() => encodeInformation(inner.data)).toThrow(AprsEncodeError);
   });
 });
+
+describe('device identification (vectors rulings, A1, A2)', () => {
+  it('matches a tocall case-sensitively', () => {
+    expect(identifyTocall('APN102')).toBeDefined();
+    expect(identifyTocall('APNl02')).toBeUndefined();
+  });
+
+  it('identifies an inner packet by its own destination', () => {
+    const p = decodeTnc2('N0CALL>APRS:}K1ABC>APDW18,TCPIP,N0CALL*:>hello');
+    if (p.data.type !== 'third-party') throw new Error(p.data.type);
+    expect(p.data.packet.device?.model).toBe('DireWolf');
+  });
+});
+
+describe('Mic-E ambiguity (vectors README, Mic-E)', () => {
+  it('writes the reported centre into the longitude digits', () => {
+    const encoded = encodeInformation({
+      type: 'mic-e',
+      micEMessage: 'off-duty',
+      latitude: 41.5,
+      longitude: -95.3825,
+      ambiguity: 2,
+      symbol: { table: '/', code: '>' },
+    });
+    const p = decodeTnc2(`N0CALL>${encoded.destination}:${decodeUtf8(encoded.info)}`);
+    // 95 degrees 22.95 minutes, two digits blanked: the box 22.xx, centre 22.50.
+    expect(encoded.info[2]! - 28).toBe(22);
+    expect(encoded.info[3]! - 28).toBe(50);
+    if (p.data.type !== 'mic-e') throw new Error(p.data.type);
+    expect(p.data.longitude).toBeCloseTo(-(95 + 22.5 / 60), 9);
+  });
+});

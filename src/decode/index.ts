@@ -2,6 +2,7 @@
 
 import { binaryToBytes, bytesToBinary } from '../bytes.js';
 import type { Diagnostic, ParseOptions } from '../diagnostics.js';
+import { identifyDevice } from '../deviceid.js';
 import { parseHeaderText } from '../header.js';
 import type { AprsData, AprsPacket, ThirdParty } from '../types.js';
 import { DecodeContext, Rejected } from './context.js';
@@ -128,6 +129,9 @@ function decodeThirdParty(ctx: DecodeContext, s: string, options: ParseOptions):
     data: inner.data,
     diagnostics: [...headerDiags, ...inner.diagnostics],
   };
+  // The inner packet has its device too, from its own destination (vectors rulings, A2).
+  const device = identifyDevice(inner.data, header.destination);
+  if (device) packet.device = device;
   // A q-construct is read only in the outer header: the third-party path is kept as sent.
   return { type: 'third-party', packet };
 }

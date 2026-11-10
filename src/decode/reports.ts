@@ -20,6 +20,7 @@ import {
   isDigit,
   isSymbolTable,
   liftMicEComment,
+  liftTelemetryAndDao,
   METRES_PER_FOOT,
   parsePosition,
   parsePositionlessWeather,
@@ -367,20 +368,24 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     }
   }
   if (altitudeFeet !== undefined) f.altitudeFeet = altitudeFeet;
+  // Base-91 telemetry and the !DAO! are lifted before the locator is read, so a locator followed
+  // straight by either has no missing space (vectors rulings, F16).
+  const joins = join !== undefined && join > 0 ? [join] : [];
+  const pre = liftTelemetryAndDao(text, joins);
+  text = pre.rest;
+  // A locator is read only at the start of the status text, after any type code or a Mic-E
+  // altitude there; after a PHG or RNG, say, it is text (vectors rulings, F17).
   let locator: string | undefined;
-  const loc = /^([A-Ra-r]{2}[0-9]{2}(?:[A-Xa-x]{2})?)\/G/.exec(text);
+  const loc = extension ? null : /^([A-Ra-r]{2}[0-9]{2}(?:[A-Xa-x]{2})?)\/G/.exec(text);
   if (loc) {
     locator = loc[1]!.toUpperCase();
-    const before = text.length;
     text = text.slice(loc[0].length);
     if (text.length > 0) {
       if (text[0] === ' ') text = text.slice(1);
       else ctx.tolerate('missing-space-after-locator');
     }
-    if (join !== undefined) join -= before - text.length;
   }
-  const joins = join !== undefined && join > 0 ? [join] : [];
-  const { lifted } = liftMicEComment(ctx, text, pos.symbol, extension, joins);
+  const { lifted } = liftMicEComment(ctx, text, pos.symbol, extension, pre);
   // The !DAO! is structure, so it is judged before the text's encoding.
   applyDao(ctx, f, pos, lifted.dao);
   applyLiftedTo(ctx, f, lifted);

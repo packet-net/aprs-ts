@@ -210,11 +210,13 @@ export function encodeQuery(d: Query): string {
     const f = d.footprint;
     if (!(f.latitude >= -90 && f.latitude <= 90) || !(f.longitude >= -180 && f.longitude <= 180)) refuse('the footprint is out of range');
     // Each value as sent, a leading space or its absence included, when that is the value (vectors
-    // rulings, E1); otherwise a positive latitude after a space, as APRS12c's example has it.
+    // rulings, E1); otherwise one that is not negative, 0 included, after a space (APRS12c ch. 15;
+    // vectors rulings, F11, F15).
     const asSent = (text: string | undefined, v: number): string | undefined =>
       text !== undefined && FOOTPRINT_VALUE.test(text) && Number(text) === v ? text : undefined;
-    const lat = asSent(f.latitudeText, f.latitude) ?? (f.latitude < 0 ? numberText(f.latitude) : ` ${numberText(f.latitude)}`);
-    const lon = asSent(f.longitudeText, f.longitude) ?? numberText(f.longitude);
+    const value = (v: number): string => (v < 0 ? numberText(v) : ` ${numberText(v)}`);
+    const lat = asSent(f.latitudeText, f.latitude) ?? value(f.latitude);
+    const lon = asSent(f.longitudeText, f.longitude) ?? value(f.longitude);
     out += `${lat},${lon},${pad(whole(f.radiusMiles, 0, 9999, 'radius'), 4)}`;
   }
   return out;
