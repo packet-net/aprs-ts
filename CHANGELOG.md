@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 (2026-11-10)
+
+This is the first stable release. The public API is now frozen under semantic versioning. From 1.0 the major and minor version are shared with aprs-vectors: a ruling round is a minor version for all five implementations, this library's own fixes are patch versions, and an API break is a major version.
 
 The 1.0 API cleanup. Everything below that is marked breaking is removed or renamed outright, with no deprecated alias left behind. The decoder and encoder are unchanged: the 100,000-line encode and build differential dumps and the decode dump over the 1,831 cases agree line for line with 0.3.0.
 
