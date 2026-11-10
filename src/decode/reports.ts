@@ -401,7 +401,10 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
       else ctx.tolerate('missing-space-after-locator');
     }
   }
-  const { lifted } = liftMicEComment(ctx, text, pos.symbol, extension, pre);
+  // A PHG or RNG is straight after the type code only where it is so as sent: one that reaches
+  // there once a later altitude is lifted is late (vectors mic-e/an-rng-reached-only-by-lifting-an-altitude-is-late).
+  const startJoined = !extension && !loc && join !== undefined && (extensionAt(text, 0)?.length ?? 0) > join;
+  const { lifted } = liftMicEComment(ctx, text, pos.symbol, extension, pre, !startJoined);
   // The !DAO! is structure, so it is judged before the text's encoding.
   applyDao(ctx, f, pos, lifted.dao);
   applyLiftedTo(ctx, f, lifted);

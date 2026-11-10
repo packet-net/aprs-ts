@@ -1214,10 +1214,11 @@ export function liftMicEComment(
   symbol: AprsSymbol,
   extension: ExtensionFound | undefined,
   pre: PreLifted,
+  atStart = true,
 ): { lifted: Lifted } {
   const options: LiftOptions = extension
     ? { extensionFound: true, extension, symbol, pre }
-    : { extensionFound: false, extensionAtStart: true, symbol, pre };
+    : { extensionFound: false, extensionAtStart: atStart, symbol, pre };
   return { lifted: liftComment(ctx, text, options) };
 }
 

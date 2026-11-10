@@ -16,6 +16,7 @@
 - A snowfall of `s` and three spaces is a weather field sent as unknown, not comment text (vectors commit a638990).
 - Storm data's fields are digits: one holding a space (`> 90`) makes the whole of it comment text, and the encoder refuses storm data with a field missing. Strict Mic-E decoding reads as lenient when the status text has no later altitude to decline (vectors commit 1788661).
 - Strict Mic-E decoding rejects a declined later altitude only when lifting telemetry or the `!DAO!` would join bytes across their place into another altitude, not when the text already held one (vectors commit 9c01dbd).
+- Mic-E: a PHG or RNG that reaches the start of the status text only once a later altitude is lifted is late, with `data-extension-in-comment` (vectors commit e27a79f).
 - `scripts/diff-dump.mjs` build mode passes Celsius and millimetre weather to the builder.
 
 - The encoder writes exactly the bytes the vectors' Encoding rule gives (packet-net/aprs-vectors, exact-bytes batch 1), and the conformance test compares them with each case's `canonical_info` byte for byte, and checks the new `rounded` re-encoding.
