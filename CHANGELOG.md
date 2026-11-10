@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 - Brought into line with the exact-bytes batch 2 rulings (packet-net/aprs-vectors, commit f205471). Every value between the steps its field holds is rounded to the nearest, halves away from zero, a value within 1e-6 of a half (in steps) taken as the half, so a latitude of 0.9764166666666666 degrees is `0058.59N`; a `/A=` altitude is rounded to whole feet (-0.5 to `-00001`), where a fraction was refused; a snowfall is rounded to its three characters (0.995 as `001`, 9.96 as `010`); and a small negative compressed speed that rounds to s = 0 is 0.
 - A course of 0 is refused in Mic-E, where it reads back as no course, and in a compressed report, where it reads back as 360. A compressed course without a speed, or a speed without a course, is refused.
