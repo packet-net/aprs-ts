@@ -10,6 +10,7 @@ Builder setters take the name of the field they fill, with the unit in it:
 
 - `.course(d)` is `.courseDegrees(d)`; `.speed(k)` is `.speedKnots(k)`; `.altitude(f)` is `.altitudeFeet(f)`; `.altitudeMetres(m)` is `.altitudeM(m)`; `.range(m)` is `.rangeMiles(m)`; `.speedKmh()` is unchanged.
 - `.commentTelemetry(...)` is `.telemetry(...)`, like the `telemetry` field it fills.
+- `PacketBuilder.telemetry(sequence, ...)` takes a number 0-999 only; a text sequence is still possible through hand-built data (`Aprs.from(...).data(...)`).
 - `MicEBuilder.old()` is `.oldData()`; `MessageBuilder.id()` is `.messageId()`.
 
 Weather and telemetry builders:
@@ -37,7 +38,7 @@ Removed from the package root:
 
 ### Added
 
-- `hasErrors(packet)`, `hasWarnings(packet)`, `phgValues(phg)` (watts, feet, dB and degrees from a PHG's codes), and `packetToTnc2(packet)`, `packetToTnc2Bytes(packet)` and `packetToAx25(packet)`, which write a received packet with its information field as received (`packetToAx25` throws `AprsEncodeError` for an address AX.25 cannot carry as sent).
+- `hasErrors(packet)`, `hasWarnings(packet)`, `phgValues(phg)` (`powerWatts`, `heightFeet`, `gainDb` and `directivityDegrees` from a PHG's codes), and `packetToTnc2(packet)`, `packetToTnc2Bytes(packet)` and `packetToAx25(packet)`, which write a received packet with its information field as received (`packetToAx25` throws `AprsEncodeError` for an address AX.25 cannot carry as sent).
 - `diff-dump` writes the API view keys `has_errors`, `has_warnings`, `ax25` and `phg`.
 
 ### Fixed

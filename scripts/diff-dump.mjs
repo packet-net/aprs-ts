@@ -220,7 +220,7 @@ function apiView(packet) {
   if (symbol) api.symbol = { description: describeSymbol(symbol) ?? null };
   if (packet.data.phg) {
     const v = phgValues(packet.data.phg);
-    api.phg = { watts: v.watts, height_feet: v.heightFeet, gain_db: v.gainDb, directivity_degrees: v.directivityDegrees };
+    api.phg = { watts: v.powerWatts, height_feet: v.heightFeet, gain_db: v.gainDb, directivity_degrees: v.directivityDegrees };
   }
   if (packet.data.type === 'third-party') api.inner = apiView(packet.data.packet);
   return api;

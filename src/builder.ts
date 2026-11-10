@@ -249,11 +249,11 @@ export class PacketBuilder {
   }
 
   /**
-   * A telemetry report: sequence, five analog values and eight bits (`'01101001'`, B1 first). A
-   * sequence given as a number is 0-999, written in three digits; a larger one is refused when
-   * the packet is built, not wrapped (vectors rulings, B6).
+   * A telemetry report: sequence, five analog values and eight bits (`'01101001'`, B1 first). The
+   * sequence is a number, 0-999, written in three digits; anything else is refused when the
+   * packet is built, not wrapped (vectors rulings, B6). Text sequences need hand-built data.
    */
-  telemetry(sequence: number | string, analog: readonly (number | null)[], bits: string): TelemetryBuilder {
+  telemetry(sequence: number, analog: readonly (number | null)[], bits: string): TelemetryBuilder {
     return new TelemetryBuilder(this.header, sequence, analog, bits);
   }
 
@@ -690,7 +690,7 @@ export class TelemetryBuilder {
 
   constructor(
     private readonly header: Header,
-    private readonly sequence: number | string,
+    private readonly sequence: number,
     private readonly analog: readonly (number | null)[],
     private readonly bits: string,
   ) {}
@@ -702,11 +702,9 @@ export class TelemetryBuilder {
   }
 
   build(): BuiltPacket {
-    let sequence = this.sequence;
-    if (typeof sequence === 'number') {
-      if (!Number.isInteger(sequence) || sequence < 0 || sequence > 999) refuse(`telemetry sequence ${sequence} is not 0-999`);
-      sequence = String(sequence).padStart(3, '0');
-    }
+    const number = this.sequence;
+    if (!Number.isInteger(number) || number < 0 || number > 999) refuse(`telemetry sequence ${String(number)} is not 0-999`);
+    const sequence = String(number).padStart(3, '0');
     const data: Mutable<Extract<AprsData, { type: 'telemetry' }>> = {
       type: 'telemetry',
       sequence,

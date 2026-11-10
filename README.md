@@ -167,7 +167,7 @@ console.log(packetToTnc2(packet)); // N1EOE>APN391,N1NCI-3*,WIDE2-1:!4216.95N/07
 console.log(packetToAx25(packet).length); // 72
 console.log(hasWarnings(packet)); // false
 if (packet.data.type === 'position' && packet.data.phg) {
-  console.log(phgValues(packet.data.phg).watts); // 36
+  console.log(phgValues(packet.data.phg).powerWatts); // 36
 }
 ```
 
@@ -198,7 +198,7 @@ console.log(identifyTocall('APDW18')?.model); // DireWolf
 
 ## Conformance
 
-The conformance vectors are a git submodule at `vectors/`. The test suite runs every case with every check the vectors' README defines (the lenient result, the strict result, the single-tolerance check, re-encoding, and the encode cases), one test per check per case: 6,137 tests, all passing. A check this implementation could not pass would be listed in `test/known-differences.json` with the reason and skipped; the list is empty.
+The conformance vectors are a git submodule at `vectors/`. The test suite runs every case with every check the vectors' README defines (the lenient result, the strict result, the single-tolerance check, re-encoding, and the encode cases), one test per check per case, and every case passes. A check this implementation could not pass would be listed in `test/known-differences.json` with the reason and skipped; the list is empty.
 
 The vectors' neutral form is not part of the public API: the tests and `scripts/diff-dump.mjs` read it from `src/neutral.ts` and `dist/neutral.js`.
 

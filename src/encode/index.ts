@@ -293,7 +293,7 @@ export function encodeTnc2(p: PacketToEncode): string {
 function ax25Address(text: string, last: boolean, flag: boolean): number[] {
   const m = /^([A-Z0-9]{1,6})(?:-([0-9]{1,2}))?$/.exec(text);
   if (!m) refuse(`${JSON.stringify(text)} is not an AX.25 address`);
-  if (m[2] !== undefined && m[2].length > 1 && m[2].startsWith('0')) refuse(`${JSON.stringify(text)} has a leading zero in its SSID, which a frame would give back without`);
+  if (m[2] !== undefined && m[2].length > 1 && m[2].startsWith('0')) refuse(`${JSON.stringify(text)} has a leading zero in its SSID, which a frame would give back without the zero`);
   const ssid = m[2] === undefined ? 0 : Number(m[2]);
   if (ssid > 15) refuse(`${JSON.stringify(text)} has an SSID over 15`);
   const call = m[1]!.padEnd(6, ' ');

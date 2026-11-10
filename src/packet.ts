@@ -49,7 +49,7 @@ export function packetToAx25(packet: AprsPacket): Uint8Array {
 
 /** What a PHG's codes stand for. */
 export interface PhgValues {
-  readonly watts: number;
+  readonly powerWatts: number;
   readonly heightFeet: number;
   readonly gainDb: number;
   /** Degrees of the beam's centre; `null` for omnidirectional. */
@@ -59,7 +59,7 @@ export interface PhgValues {
 /** The power, height, gain and directivity a PHG's codes stand for (APRS12c ch. 7). */
 export function phgValues(phg: Phg): PhgValues {
   return {
-    watts: phg.power * phg.power,
+    powerWatts: phg.power * phg.power,
     heightFeet: 10 * 2 ** phg.height,
     gainDb: phg.gain,
     directivityDegrees: phg.directivity === 0 ? null : phg.directivity * 45,

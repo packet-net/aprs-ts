@@ -408,7 +408,7 @@ describe('1.0 API', () => {
     expect(hasErrors(packet)).toBe(false);
     expect(hasWarnings(packet)).toBe(false);
     if (packet.data.type !== 'position' || !packet.data.phg) throw new Error('no phg');
-    expect(phgValues(packet.data.phg)).toEqual({ watts: 36, heightFeet: 40, gainDb: 3, directivityDegrees: null });
+    expect(phgValues(packet.data.phg)).toEqual({ powerWatts: 36, heightFeet: 40, gainDb: 3, directivityDegrees: null });
     expect(hasWarnings(decodeTnc2('N1EOE>APN391:!4216.95n/07243.20w#'))).toBe(true);
     expect(() => packetToAx25(decodeTnc2('WB4APR-00>APRS:>x'))).toThrow(AprsEncodeError);
   });
