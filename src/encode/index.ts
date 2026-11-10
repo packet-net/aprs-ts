@@ -9,7 +9,7 @@ import { formatDiagnostic, ParseOptions } from '../diagnostics.js';
 import { isAprsIsAddress } from '../header.js';
 import { toNeutralData } from '../neutral.js';
 import type { AprsData, CompressionType, PathEntry } from '../types.js';
-import { AprsEncodeError, refuse } from './common.js';
+import { AprsEncodeError, DEFAULT_DESTINATION, refuse } from './common.js';
 import {
   encodeAck,
   encodeAgrelo,
@@ -32,14 +32,14 @@ import {
 } from './other.js';
 import { DEFAULT_COMPRESSION, encodeItem, encodeMicE, encodeObject, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
 
-export { AprsEncodeError } from './common.js';
+export { AprsEncodeError, DEFAULT_DESTINATION } from './common.js';
 
 /** An encoded information field, and for Mic-E the destination address it needs. */
 export interface EncodedInformation {
   /** The information field bytes. */
-  info: Uint8Array;
+  readonly information: Uint8Array;
   /** Mic-E only: the destination address, which carries half the position. */
-  destination?: string;
+  readonly destination?: string;
 }
 
 interface Attempt {
@@ -103,7 +103,7 @@ function attempt(data: AprsData, mode: CommentMode): Attempt {
       const original = data.packet.information;
       const inner = data.packet.data;
       const asReceived = original.length > 0 || (inner.type === 'unrecognized' && inner.reason === 'empty');
-      const info = asReceived ? original : encodeInformation(inner).info;
+      const info = asReceived ? original : encodeInformation(inner).information;
       return { binary: encodeThirdParty(data, bytesToBinary(info)) };
     }
     case 'user-defined':
@@ -175,7 +175,7 @@ function expected(data: AprsData, a: Attempt): AprsData {
 }
 
 function check(data: AprsData, a: Attempt): string[] {
-  const decoded = decodeInformation(binaryToBytes(a.binary), a.destination ?? 'APZ001', ParseOptions.lenient);
+  const decoded = decodeInformation(binaryToBytes(a.binary), a.destination ?? DEFAULT_DESTINATION, ParseOptions.lenient);
   const problems: string[] = [];
   const bad = decoded.diagnostics.filter((d) => d.severity !== 'info');
   if (bad.length > 0) problems.push(`it would read back with ${bad.map(formatDiagnostic).join(', ')}`);
@@ -228,15 +228,14 @@ export function encodeInformation(data: AprsData): EncodedInformation {
     }
   }
   if (problems.length > 0) refuse(`it would not read back the same: ${problems.join('; ')}`);
-  const out: EncodedInformation = { info: binaryToBytes(chosen.binary) };
-  if (chosen.destination !== undefined) out.destination = chosen.destination;
-  return out;
+  const information = binaryToBytes(chosen.binary);
+  return chosen.destination !== undefined ? { information, destination: chosen.destination } : { information };
 }
 
 /** A packet to encode. */
 export interface PacketToEncode {
   source: string;
-  /** The destination (tocall); ignored for Mic-E, which computes it. Defaults to `APZ001`. */
+  /** The destination (tocall); ignored for Mic-E, which computes it. Defaults to `DEFAULT_DESTINATION` (`APZ001`). */
   destination?: string;
   /** Digipeater path, e.g. `['WIDE1-1', 'WIDE2-1']`; a trailing `*` marks an entry used. */
   path?: readonly (string | PathEntry)[];
@@ -247,23 +246,40 @@ function pathText(entry: string | PathEntry): string {
   return typeof entry === 'string' ? entry : entry.used ? `${entry.address}*` : entry.address;
 }
 
-function resolve(p: PacketToEncode): { destination: string; info: Uint8Array; path: string[] } {
+function resolve(p: PacketToEncode): { destination: string; information: Uint8Array; path: string[] } {
   const encoded = encodeInformation(p.data);
-  const destination = encoded.destination ?? p.destination ?? 'APZ001';
-  return { destination, info: encoded.info, path: (p.path ?? []).map(pathText) };
+  const destination = encoded.destination ?? p.destination ?? DEFAULT_DESTINATION;
+  return { destination, information: encoded.information, path: (p.path ?? []).map(pathText) };
+}
+
+/** Refuses a source, destination or path entry that APRS-IS does not allow as an address. */
+export function checkHeaderAddresses(source: string, destination: string, path: readonly string[]): void {
+  if (!isAprsIsAddress(source)) refuse(`the source ${JSON.stringify(source)} is not a valid address`);
+  if (!isAprsIsAddress(destination)) refuse(`the destination ${JSON.stringify(destination)} is not a valid address`);
+  for (const e of path) if (!isAprsIsAddress(e.replace(/\*$/, ''))) refuse(`the path entry ${JSON.stringify(e)} is not a valid address`);
+}
+
+/** A TNC2 line from a header and an information field already encoded; the addresses are not checked. */
+export function tnc2BytesOf(source: string, destination: string, path: readonly string[], information: Uint8Array): Uint8Array {
+  const header = [`${source}>${destination}`, ...path].join(',') + ':';
+  const out = new Uint8Array(header.length + information.length);
+  out.set(binaryToBytes(header), 0);
+  out.set(information, header.length);
+  return out;
+}
+
+/** A TNC2 line as text; refuses an information field that is not UTF-8. */
+export function tnc2TextOf(bytes: Uint8Array): string {
+  const text = decodeUtf8(bytes);
+  if (text === undefined) refuse('the information field is not UTF-8 text; use encodeTnc2Bytes');
+  return text;
 }
 
 /** Encodes a packet as the bytes of a TNC2 / APRS-IS line (the information field as sent). */
 export function encodeTnc2Bytes(p: PacketToEncode): Uint8Array {
   const r = resolve(p);
-  if (!isAprsIsAddress(p.source)) refuse(`the source ${JSON.stringify(p.source)} is not a valid address`);
-  if (!isAprsIsAddress(r.destination)) refuse(`the destination ${JSON.stringify(r.destination)} is not a valid address`);
-  for (const e of r.path) if (!isAprsIsAddress(e.replace(/\*$/, ''))) refuse(`the path entry ${JSON.stringify(e)} is not a valid address`);
-  const header = [`${p.source}>${r.destination}`, ...r.path].join(',') + ':';
-  const out = new Uint8Array(header.length + r.info.length);
-  out.set(binaryToBytes(header), 0);
-  out.set(r.info, header.length);
-  return out;
+  checkHeaderAddresses(p.source, r.destination, r.path);
+  return tnc2BytesOf(p.source, r.destination, r.path, r.information);
 }
 
 /**
@@ -271,14 +287,13 @@ export function encodeTnc2Bytes(p: PacketToEncode): Uint8Array {
  * text form; use `encodeTnc2Bytes` for that.
  */
 export function encodeTnc2(p: PacketToEncode): string {
-  const text = decodeUtf8(encodeTnc2Bytes(p));
-  if (text === undefined) refuse('the information field is not UTF-8 text; use encodeTnc2Bytes');
-  return text;
+  return tnc2TextOf(encodeTnc2Bytes(p));
 }
 
 function ax25Address(text: string, last: boolean, flag: boolean): number[] {
   const m = /^([A-Z0-9]{1,6})(?:-([0-9]{1,2}))?$/.exec(text);
   if (!m) refuse(`${JSON.stringify(text)} is not an AX.25 address`);
+  if (m[2] !== undefined && m[2].length > 1 && m[2].startsWith('0')) refuse(`${JSON.stringify(text)} has a leading zero in its SSID, which a frame would give back without`);
   const ssid = m[2] === undefined ? 0 : Number(m[2]);
   if (ssid > 15) refuse(`${JSON.stringify(text)} has an SSID over 15`);
   const call = m[1]!.padEnd(6, ' ');
@@ -287,21 +302,25 @@ function ax25Address(text: string, last: boolean, flag: boolean): number[] {
   return out;
 }
 
-/** Encodes a packet as an AX.25 UI frame in KISS form (no flags, no FCS). */
-export function encodeAx25(p: PacketToEncode): Uint8Array {
-  const r = resolve(p);
-  const path = p.path ?? [];
+/** An AX.25 UI frame from a header and an information field already encoded. */
+export function ax25Of(source: string, destination: string, path: readonly (string | PathEntry)[], information: Uint8Array): Uint8Array {
   if (path.length > 8) refuse('AX.25 allows at most 8 digipeaters');
   const bytes: number[] = [];
-  bytes.push(...ax25Address(r.destination, false, true));
-  bytes.push(...ax25Address(p.source, path.length === 0, false));
+  bytes.push(...ax25Address(destination, false, true));
+  bytes.push(...ax25Address(source, path.length === 0, false));
   path.forEach((e, i) => {
     const address = typeof e === 'string' ? e.replace(/\*$/, '') : e.address;
     const used = typeof e === 'string' ? e.endsWith('*') : e.used;
     bytes.push(...ax25Address(address, i === path.length - 1, used));
   });
-  bytes.push(0x03, 0xf0, ...r.info);
+  bytes.push(0x03, 0xf0, ...information);
   return Uint8Array.from(bytes);
+}
+
+/** Encodes a packet as an AX.25 UI frame in KISS form (no flags, no FCS). */
+export function encodeAx25(p: PacketToEncode): Uint8Array {
+  const r = resolve(p);
+  return ax25Of(p.source, r.destination, p.path ?? [], r.information);
 }
 
 /** Wraps an AX.25 frame for a KISS TNC: FEND, a data command on `port`, escaping, FEND. */

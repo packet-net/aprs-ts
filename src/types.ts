@@ -261,6 +261,12 @@ export interface MicEReport extends PositionedFields {
   readonly micEMessage: MicEMessage;
   /** `'` rather than `` ` ``: old GPS data. */
   readonly oldData?: boolean;
+  /**
+   * Where the altitude was written: `true` for a `/A=` in the status text (feet), left out when
+   * it was in the Mic-E altitude bytes (metres). The decoder sets it, the encoder honours it,
+   * and the neutral form does not carry it.
+   */
+  readonly altitudeInComment?: boolean;
   /** The device type code before the status text: `` ` ``, `'`, `>`, `]` or a space. */
   readonly typeCode?: string;
   /** The device suffix at the end of the status text, when the device database knows it. */

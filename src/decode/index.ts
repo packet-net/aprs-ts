@@ -1,7 +1,7 @@
 // The information field decoder: picks the format by the data type identifier.
 
 import { binaryToBytes, bytesToBinary } from '../bytes.js';
-import type { Diagnostic, ParseOptions } from '../diagnostics.js';
+import { ParseOptions, type Diagnostic } from '../diagnostics.js';
 import { identifyDevice } from '../deviceid.js';
 import { parseHeaderText } from '../header.js';
 import type { AprsData, AprsPacket, ThirdParty } from '../types.js';
@@ -24,12 +24,13 @@ import { decodeItem, decodeMicE, decodeObject, decodePositionlessWeather, decode
 
 /** The result of decoding an information field. */
 export interface DecodedInformation {
-  data: AprsData;
-  diagnostics: Diagnostic[];
+  readonly data: AprsData;
+  readonly diagnostics: readonly Diagnostic[];
 }
 
-/** Decodes an information field; `destination` matters for Mic-E. */
-export function decodeInformation(info: Uint8Array, destination: string, options: ParseOptions): DecodedInformation {
+/** Decodes an information field; `destination` matters for Mic-E. `options` default to lenient. */
+export function decodeInformation(information: Uint8Array, destination: string, options: ParseOptions = ParseOptions.lenient): DecodedInformation {
+  const info = information;
   const ctx = new DecodeContext(options, destination);
   let data: AprsData;
   try {

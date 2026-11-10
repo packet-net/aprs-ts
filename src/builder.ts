@@ -4,8 +4,8 @@
 //     .via('WIDE1-1', 'WIDE2-1')
 //     .position(51.45, -0.98)
 //     .symbol(Symbols.car)
-//     .course(88)
-//     .speed(36)
+//     .courseDegrees(88)
+//     .speedKnots(36)
 //     .comment('Mobile')
 //     .build();
 //   packet.toTnc2(); // 'M0LTE-9>APZ001,WIDE1-1,WIDE2-1:!5127.00N/00058.80W>088/036Mobile'
@@ -13,9 +13,8 @@
 // `build()` encodes the packet, so anything the spec does not allow is refused there, with an
 // `AprsEncodeError` that says why.
 
-import { nearest, refuse } from './encode/common.js';
-import { ALTITUDE_GIVEN_IN_FEET } from './encode/position.js';
-import { encodeInformation, encodeAx25, encodeTnc2, encodeTnc2Bytes, wrapKiss, type PacketToEncode } from './encode/index.js';
+import { DEFAULT_DESTINATION, nearest, refuse } from './encode/common.js';
+import { ax25Of, checkHeaderAddresses, encodeInformation, tnc2BytesOf, tnc2TextOf, wrapKiss } from './encode/index.js';
 import { symbolOf } from './symbols.js';
 import type {
   AprsData,
@@ -25,21 +24,21 @@ import type {
   CompressionType,
   Dao,
   MicEMessage,
+  PathEntry,
   Phg,
   PositionedFields,
   VoiceFrequency,
   Weather,
 } from './types.js';
 
-/** The tocall used when none is given: the experimental `APZ` range. */
-export const DEFAULT_DESTINATION = 'APZ001';
+export { DEFAULT_DESTINATION };
 
 /** A packet the builder made: its parts, and the ways to send it. */
 export interface BuiltPacket {
   readonly source: string;
   /** The destination (for Mic-E, the one the encoder computed). */
   readonly destination: string;
-  readonly path: readonly string[];
+  readonly path: readonly PathEntry[];
   readonly data: AprsData;
   /** The information field bytes. */
   readonly information: Uint8Array;
@@ -56,42 +55,66 @@ export interface BuiltPacket {
 interface Header {
   source: string;
   destination?: string;
-  path: string[];
+  path: PathEntry[];
 }
 
+function pathEntryOf(entry: string | PathEntry): PathEntry {
+  if (typeof entry !== 'string') return { address: entry.address, used: entry.used };
+  return entry.endsWith('*') ? { address: entry.slice(0, -1), used: true } : { address: entry, used: false };
+}
+
+function pathText(entry: PathEntry): string {
+  return entry.used ? `${entry.address}*` : entry.address;
+}
+
+/** Encodes the data and checks the header's addresses, so a `BuiltPacket` can always be written. */
 function built(header: Header, data: AprsData): BuiltPacket {
   const encoded = encodeInformation(data);
   const destination = encoded.destination ?? header.destination ?? DEFAULT_DESTINATION;
-  const toEncode: PacketToEncode = { source: header.source, destination, path: header.path, data };
+  const path = header.path.map((e) => Object.freeze({ ...e }));
+  const text = path.map(pathText);
+  checkHeaderAddresses(header.source, destination, text);
+  const information = encoded.information;
+  const frame = (): Uint8Array => ax25Of(header.source, destination, path, information);
   return Object.freeze({
     source: header.source,
     destination,
-    path: Object.freeze([...header.path]),
+    path: Object.freeze(path),
     data,
-    information: encoded.info,
-    toTnc2: () => encodeTnc2(toEncode),
-    toTnc2Bytes: () => encodeTnc2Bytes(toEncode),
-    toAx25: () => encodeAx25(toEncode),
-    toKiss: (port = 0) => wrapKiss(encodeAx25(toEncode), port),
+    information,
+    toTnc2: () => tnc2TextOf(tnc2BytesOf(header.source, destination, text, information)),
+    toTnc2Bytes: () => tnc2BytesOf(header.source, destination, text, information),
+    toAx25: frame,
+    toKiss: (port = 0) => wrapKiss(frame(), port),
   });
 }
 
+type OneUnit<A extends string, B extends string> =
+  | ({ readonly [K in A]?: number } & { readonly [K in B]?: never })
+  | ({ readonly [K in B]?: number } & { readonly [K in A]?: never });
+
 /**
  * Weather as a program may have it: the units APRS sends (Fahrenheit, inches), or Celsius and
- * millimetres, which the builder converts (vectors rulings, B2). Give each value in one unit.
+ * millimetres, which the builder converts (vectors rulings, B2). Give each value in one unit: the
+ * type refuses both (`{ temperatureF: 61, temperatureC: 16 }` does not compile), and `build()`
+ * refuses it with an `AprsEncodeError` for a caller the type does not stop.
  */
-export interface WeatherInput extends Weather {
-  readonly temperatureC?: number;
-  readonly rain1hMm?: number;
-  readonly rain24hMm?: number;
-  readonly rainMidnightMm?: number;
-}
+export type WeatherInput = Omit<Weather, 'temperatureF' | 'rain1hIn' | 'rain24hIn' | 'rainMidnightIn'> &
+  OneUnit<'temperatureF', 'temperatureC'> &
+  OneUnit<'rain1hIn', 'rain1hMm'> &
+  OneUnit<'rain24hIn', 'rain24hMm'> &
+  OneUnit<'rainMidnightIn', 'rainMidnightMm'>;
 
 const MM_PER_INCH = 25.4;
 
 /** Weather in the units APRS sends; a value in two units is refused. */
 function weatherOf(input: WeatherInput): Weather {
-  const { temperatureC, rain1hMm, rain24hMm, rainMidnightMm, ...rest } = input;
+  const { temperatureC, rain1hMm, rain24hMm, rainMidnightMm, ...rest } = input as WeatherInput & Weather & {
+    temperatureC?: number;
+    rain1hMm?: number;
+    rain24hMm?: number;
+    rainMidnightMm?: number;
+  };
   const w: Mutable<Weather> = { ...rest };
   const convert = (metric: number | undefined, key: 'temperatureF' | 'rain1hIn' | 'rain24hIn' | 'rainMidnightIn', f: (v: number) => number): void => {
     if (metric === undefined) return;
@@ -143,9 +166,9 @@ export class PacketBuilder {
     return new PacketBuilder({ ...this.header, destination });
   }
 
-  /** The digipeater path, e.g. `via('WIDE1-1', 'WIDE2-1')`. */
-  via(...path: string[]): PacketBuilder {
-    return new PacketBuilder({ ...this.header, path: [...this.header.path, ...path] });
+  /** The digipeater path, e.g. `via('WIDE1-1', 'WIDE2-1')`; a trailing `*` marks an entry used. */
+  via(...path: (string | PathEntry)[]): PacketBuilder {
+    return new PacketBuilder({ ...this.header, path: [...this.header.path, ...path.map(pathEntryOf)] });
   }
 
   /** A position report. */
@@ -153,9 +176,36 @@ export class PacketBuilder {
     return new PositionBuilder(this.header, latitude, longitude);
   }
 
-  /** A weather report at a position (the weather station symbol, unless you pick another `_`). */
-  weather(latitude: number, longitude: number, weather: WeatherInput): PositionBuilder {
-    return new PositionBuilder(this.header, latitude, longitude).symbol('/_').weather(weather);
+  /**
+   * A weather report. With a position it is a position report with weather (the weather station
+   * symbol, unless you pick another); without one it is a positionless weather report, which is
+   * not recommended: one with a position is better. `at` is the report's time: a positionless
+   * report has one always (default now, as month, day, hour and minute), a positioned one only
+   * if you give it.
+   */
+  weather(weather: WeatherInput, position: { latitude: number; longitude: number; at?: Date }): PositionBuilder;
+  weather(weather: WeatherInput, options?: { at?: Date }): DataBuilder;
+  weather(
+    weather: WeatherInput,
+    options: { latitude?: number; longitude?: number; at?: Date } = {},
+  ): PositionBuilder | DataBuilder {
+    const { latitude, longitude, at } = options;
+    if (latitude !== undefined && longitude !== undefined) {
+      const b = new PositionBuilder(this.header, latitude, longitude).symbol('/_').weather(weather);
+      return at === undefined ? b : b.timestamp(at);
+    }
+    if (latitude !== undefined || longitude !== undefined) refuse('a weather report with a position needs both latitude and longitude');
+    const when = at ?? new Date();
+    return new DataBuilder(this.header, () => {
+      const timestamp: AprsTimestamp = {
+        kind: 'mdhm',
+        month: when.getUTCMonth() + 1,
+        day: when.getUTCDate(),
+        hour: when.getUTCHours(),
+        minute: when.getUTCMinutes(),
+      };
+      return { type: 'weather', timestamp, weather: weatherOf(weather) };
+    });
   }
 
   /** An object: `timestamp` defaults to now (objects always carry one). */
@@ -207,38 +257,26 @@ export class PacketBuilder {
     return new TelemetryBuilder(this.header, sequence, analog, bits);
   }
 
-  /** Telemetry channel names (`PARM.`), sent to the station whose telemetry they describe. */
-  telemetryNames(addressee: string, names: readonly string[]): DataBuilder {
+  /** Telemetry channel names (`PARM.`), sent to the station whose telemetry they describe (default: this one). */
+  telemetryNames(names: readonly string[], addressee: string = this.header.source): DataBuilder {
     return new DataBuilder(this.header, { type: 'telemetry-names', addressee, names: [...names] });
   }
 
   /** Telemetry units and labels (`UNIT.`). */
-  telemetryUnits(addressee: string, units: readonly string[]): DataBuilder {
+  telemetryUnits(units: readonly string[], addressee: string = this.header.source): DataBuilder {
     return new DataBuilder(this.header, { type: 'telemetry-units', addressee, units: [...units] });
   }
 
   /** Telemetry equation coefficients (`EQNS.`): a, b, c for each analog channel. */
-  telemetryCoefficients(addressee: string, coefficients: readonly number[]): DataBuilder {
+  telemetryCoefficients(coefficients: readonly number[], addressee: string = this.header.source): DataBuilder {
     return new DataBuilder(this.header, { type: 'telemetry-coefficients', addressee, coefficients: [...coefficients] });
   }
 
-  /** Telemetry bit sense and project title (`BITS.`). */
-  telemetryBits(addressee: string, bits: string, project?: string): DataBuilder {
+  /** Telemetry bit sense and project title (`BITS.`): `bits` is eight characters, `'11111111'`. */
+  telemetryBits(bits: string, project?: string, addressee: string = this.header.source): DataBuilder {
     const data: Mutable<Extract<AprsData, { type: 'telemetry-bits' }>> = { type: 'telemetry-bits', addressee, bits };
     if (project !== undefined) data.project = project;
     return new DataBuilder(this.header, data);
-  }
-
-  /** A positionless weather report (not recommended: a weather report with a position is better). */
-  weatherReport(weather: WeatherInput, at: Date = new Date()): DataBuilder {
-    const timestamp: AprsTimestamp = {
-      kind: 'mdhm',
-      month: at.getUTCMonth() + 1,
-      day: at.getUTCDate(),
-      hour: at.getUTCHours(),
-      minute: at.getUTCMinutes(),
-    };
-    return new DataBuilder(this.header, { type: 'weather', timestamp, weather: weatherOf(weather) });
   }
 
   /** Any data, built by hand. */
@@ -251,12 +289,12 @@ export class PacketBuilder {
 export class DataBuilder {
   constructor(
     protected readonly header: Header,
-    protected readonly value: AprsData,
+    protected readonly value: AprsData | (() => AprsData),
   ) {}
 
   /** Encodes the packet; throws `AprsEncodeError` if the spec does not allow it. */
   build(): BuiltPacket {
-    return built(this.header, this.value);
+    return built(this.header, typeof this.value === 'function' ? this.value() : this.value);
   }
 
   /** Shorthand for `build().toTnc2()`. */
@@ -290,13 +328,13 @@ abstract class PositionedBuilder<Self> {
    * rulings, B1). A course of 0 is written `000` in an uncompressed report, left out of a Mic-E
    * report, and refused in a compressed one, whose bytes have no unknown course.
    */
-  course(degrees: number): Self {
+  courseDegrees(degrees: number): Self {
     this.fields.courseDegrees = degrees;
     return this.self();
   }
 
   /** Speed, knots. */
-  speed(knots: number): Self {
+  speedKnots(knots: number): Self {
     this.fields.speedKnots = knots;
     return this.self();
   }
@@ -308,7 +346,7 @@ abstract class PositionedBuilder<Self> {
   }
 
   /** Altitude, feet, sent as a `/A=` in whole feet (rounded to the nearest, halves away from zero). */
-  altitude(feet: number): Self {
+  altitudeFeet(feet: number): Self {
     this.fields.altitudeFeet = feet;
     this.altitudeUnit = 'feet';
     return this.self();
@@ -318,7 +356,7 @@ abstract class PositionedBuilder<Self> {
    * Altitude, metres: converted to feet (0.3048 m each) and rounded once for a `/A=`; a Mic-E
    * report sends it in its own altitude bytes, whose unit is the metre, rounded to the metre.
    */
-  altitudeMetres(metres: number): Self {
+  altitudeM(metres: number): Self {
     this.fields.altitudeFeet = metres / 0.3048;
     this.altitudeUnit = 'metres';
     return this.self();
@@ -340,7 +378,7 @@ abstract class PositionedBuilder<Self> {
   }
 
   /** Base-91 comment telemetry: a sequence and one to five analog values (0-8280). */
-  commentTelemetry(sequence: number, analog: readonly number[], digital?: number): Self {
+  telemetry(sequence: number, analog: readonly number[], digital?: number): Self {
     const t: Mutable<CommentTelemetry> = { sequence, analog: [...analog] };
     if (digital !== undefined) t.digital = digital;
     this.fields.telemetry = t;
@@ -371,14 +409,16 @@ abstract class ReportBuilder<Self> extends PositionedBuilder<Self> {
   }
 
   /** A pre-calculated radio range, miles. */
-  range(miles: number): Self {
+  rangeMiles(miles: number): Self {
     this.fields.rangeMiles = miles;
     return this.self();
   }
 
+  protected weatherValue?: WeatherInput;
+
   /** Weather data (needs a weather station symbol, `_`). */
   weather(weather: WeatherInput): Self {
-    this.fields.weather = weatherOf(weather);
+    this.weatherValue = weather;
     return this.self();
   }
 
@@ -413,6 +453,7 @@ export class PositionBuilder extends ReportBuilder<PositionBuilder> {
 
   build(): BuiltPacket {
     const data: Mutable<Extract<AprsData, { type: 'position' }>> = { type: 'position', ...this.fields };
+    if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.timestampValue) data.timestamp = this.timestampValue;
     if (this.messagingValue) data.messaging = true;
     return built(this.header, data);
@@ -460,6 +501,7 @@ export class ObjectBuilder extends ReportBuilder<ObjectBuilder> {
       timestamp: this.timestampValue,
       ...this.fields,
     };
+    if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.killedValue) data.killed = true;
     return built(this.header, data);
   }
@@ -494,6 +536,7 @@ export class ItemBuilder extends ReportBuilder<ItemBuilder> {
 
   build(): BuiltPacket {
     const data: Mutable<Extract<AprsData, { type: 'item' }>> = { type: 'item', name: this.name, ...this.fields };
+    if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.killedValue) data.killed = true;
     return built(this.header, data);
   }
@@ -533,8 +576,8 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
   }
 
   /** Marks the position as old (not current) GPS data. */
-  old(old = true): MicEBuilder {
-    this.oldValue = old;
+  oldData(oldData = true): MicEBuilder {
+    this.oldValue = oldData;
     return this;
   }
 
@@ -544,7 +587,7 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
     if (data.courseDegrees !== undefined && Number.isFinite(data.courseDegrees) && nearest(data.courseDegrees) === 0) delete data.courseDegrees;
     // Metres go in the Mic-E altitude bytes, to the metre; feet in a /A= (B2).
     if (data.altitudeFeet !== undefined && this.altitudeUnit === 'metres') data.altitudeFeet = nearest(data.altitudeFeet * 0.3048) / 0.3048;
-    if (data.altitudeFeet !== undefined && this.altitudeUnit === 'feet') ALTITUDE_GIVEN_IN_FEET.add(data);
+    if (data.altitudeFeet !== undefined && this.altitudeUnit === 'feet') data.altitudeInComment = true;
     if (this.typeCodeValue !== undefined) data.typeCode = this.typeCodeValue;
     if (this.locatorValue !== undefined) data.locator = this.locatorValue;
     if (this.oldValue) data.oldData = true;
@@ -568,7 +611,7 @@ export class MessageBuilder {
   ) {}
 
   /** A message ID (1-5 letters or digits), so the addressee acknowledges it. */
-  id(id: string | number): MessageBuilder {
+  messageId(id: string | number): MessageBuilder {
     this.idValue = String(id);
     return this;
   }

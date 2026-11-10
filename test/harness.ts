@@ -6,15 +6,13 @@ import {
   AprsHeaderError,
   decodeAx25,
   decodeTnc2,
-  encodeUtf8,
   formatDiagnostic,
-  hexToBytes,
   ParseOptions,
-  toNeutralData,
-  toNeutralHeader,
   type AprsPacket,
   type TolerableCode,
 } from '../src/index.js';
+import { encodeUtf8, hexToBytes } from '../src/bytes.js';
+import { toNeutralData, toNeutralHeader } from '../src/neutral.js';
 
 /** The vectors: the submodule, or another checkout given by APRS_VECTORS (with a trailing /). */
 export const VECTORS_DIR = process.env.APRS_VECTORS ?? fileURLToPath(new URL('../vectors/', import.meta.url));

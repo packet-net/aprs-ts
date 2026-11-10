@@ -408,12 +408,15 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
   // The !DAO! is structure, so it is judged before the text's encoding.
   applyDao(ctx, f, pos, lifted.dao);
   applyLiftedTo(ctx, f, lifted);
+  // An altitude lifted from the text is a `/A=` in feet; one in the Mic-E bytes is in metres.
+  const altitudeInComment = lifted.altitudeFeet !== undefined;
 
   const dti = s[0]!;
   const head: {
     type: 'mic-e';
     micEMessage: MicEMessage;
     oldData?: boolean;
+    altitudeInComment?: boolean;
     typeCode?: string;
     deviceSuffix?: string;
     locator?: string;
@@ -421,6 +424,7 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     destinationSsid?: number;
   } = { type: 'mic-e', micEMessage: dest.message };
   if (dti === "'" || dti === '\x1d') head.oldData = true;
+  if (altitudeInComment) head.altitudeInComment = true;
   if (typeCode !== undefined) head.typeCode = typeCode;
   if (deviceSuffix !== undefined) head.deviceSuffix = deviceSuffix;
   if (locator !== undefined) head.locator = locator;

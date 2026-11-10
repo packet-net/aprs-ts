@@ -677,12 +677,6 @@ function micEDestination(d: MicEReport, lat: Digits, lonDegrees: number): string
   return out;
 }
 
-/**
- * Mic-E reports whose altitude was given in feet by a program, so it goes in a `/A=` and not the
- * Mic-E altitude bytes, whose unit is the metre (vectors rulings, B2).
- */
-export const ALTITUDE_GIVEN_IN_FEET = new WeakSet<object>();
-
 export function micEAltitude(feet: number): string | undefined {
   const metres = nearest(feet * METRES_PER_FOOT);
   if (Math.abs(metres / METRES_PER_FOOT - feet) > 1e-6) return undefined;
@@ -753,7 +747,7 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   }
   let altitudeInComment: number | undefined;
   if (d.altitudeFeet !== undefined) {
-    const alt = ALTITUDE_GIVEN_IN_FEET.has(d) ? undefined : micEAltitude(d.altitudeFeet);
+    const alt = d.altitudeInComment ? undefined : micEAltitude(d.altitudeFeet);
     if (alt !== undefined) text += alt;
     else altitudeInComment = d.altitudeFeet;
   }

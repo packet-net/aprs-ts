@@ -2,21 +2,13 @@
 
 export * from './types.js';
 export * from './codes.js';
-export { ParseOptions, diagnostic, formatDiagnostic, type Diagnostic, type Severity } from './diagnostics.js';
+export { ParseOptions, formatDiagnostic, type Diagnostic, type Severity } from './diagnostics.js';
 export { AprsHeaderError, findQConstruct, formatPath, formatTnc2Header, isAprsIsAddress } from './header.js';
 export { decodeTnc2, decodeAx25, decodeKiss, unwrapKiss } from './decoder.js';
 export { decodeInformation, type DecodedInformation } from './decode/index.js';
 export { identifyTocall, identifyMicE, DEVICEID_SOURCE, DEVICE_CLASSES } from './deviceid.js';
-export {
-  toNeutralData,
-  toNeutralHeader,
-  toNeutralPacket,
-  fromNeutralData,
-  formatTimestamp,
-  parseTimestamp,
-  type Neutral,
-} from './neutral.js';
-export { bytesToHex, hexToBytes, encodeUtf8, decodeUtf8 } from './bytes.js';
+export { formatTimestamp, parseTimestamp } from './neutral.js';
+export { hasErrors, hasWarnings, packetToTnc2, packetToTnc2Bytes, packetToAx25, phgValues, type PhgValues } from './packet.js';
 export {
   AprsEncodeError,
   encodeInformation,
@@ -40,8 +32,9 @@ export {
   sameSymbol,
   type SymbolName,
 } from './symbols.js';
-export {
-  Aprs,
+export { Aprs, DEFAULT_DESTINATION, timestampOf, type BuiltPacket, type WeatherInput } from './builder.js';
+// The builder classes are for naming types only: `Aprs.from()` is the way in.
+export type {
   PacketBuilder,
   PositionBuilder,
   ObjectBuilder,
@@ -51,8 +44,4 @@ export {
   StatusBuilder,
   TelemetryBuilder,
   DataBuilder,
-  DEFAULT_DESTINATION,
-  timestampOf,
-  type BuiltPacket,
-  type WeatherInput,
 } from './builder.js';

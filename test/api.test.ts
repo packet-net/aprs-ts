@@ -6,15 +6,19 @@ import {
   AprsEncodeError,
   AprsHeaderError,
   Aprs,
-  bytesToHex,
   decodeAx25,
+  decodeInformation,
   decodeKiss,
   decodeTnc2,
-  decodeUtf8,
   describeSymbol,
   encodeAx25,
   encodeInformation,
   formatDiagnostic,
+  hasErrors,
+  hasWarnings,
+  packetToAx25,
+  packetToTnc2,
+  phgValues,
   identifyTocall,
   isTolerable,
   overlayOf,
@@ -22,12 +26,14 @@ import {
   symbolName,
   symbolOf,
   Symbols,
-  toNeutralData,
   TOLERABLE_CODES,
   withOverlay,
   withoutOverlay,
   wrapKiss,
+  type WeatherInput,
 } from '../src/index.js';
+import { bytesToHex, decodeUtf8, encodeUtf8 } from '../src/bytes.js';
+import { toNeutralData } from '../src/neutral.js';
 
 describe('builder', () => {
   it('builds a position report', () => {
@@ -35,8 +41,8 @@ describe('builder', () => {
       .via('WIDE1-1', 'WIDE2-1')
       .position(51.45, -0.98)
       .symbol(Symbols.car)
-      .course(88)
-      .speed(36)
+      .courseDegrees(88)
+      .speedKnots(36)
       .comment('Mobile')
       .build();
     expect(packet.toTnc2()).toBe('M0LTE-9>APZ001,WIDE1-1,WIDE2-1:!5127.00N/00058.80W>088/036Mobile');
@@ -53,7 +59,7 @@ describe('builder', () => {
       .symbol('/>')
       .timestamp({ kind: 'dhm-zulu', day: 9, hour: 23, minute: 45 })
       .messaging()
-      .altitude(1234)
+      .altitudeFeet(1234)
       .frequency(146.52, { tone: 'tone', toneValue: 100 })
       .comment('Hello')
       .toTnc2();
@@ -71,8 +77,8 @@ describe('builder', () => {
       .micE(33.42733333333334, -112.129)
       .symbol(Symbols.jeep)
       .micEMessage('returning')
-      .course(251)
-      .speed(20)
+      .courseDegrees(251)
+      .speedKnots(20)
       .build();
     expect(packet.destination).toBe('S32UVT');
     const back = decodeTnc2(packet.toTnc2());
@@ -85,15 +91,15 @@ describe('builder', () => {
         .object('LEADER', 49.05833333333333, -72.02916666666667)
         .timestamp({ kind: 'dhm-zulu', day: 9, hour: 23, minute: 45 })
         .symbol(Symbols.car)
-        .course(88)
-        .speed(36)
+        .courseDegrees(88)
+        .speedKnots(36)
         .toTnc2(),
     ).toBe('M0LTE>APZ001:;LEADER   *092345z4903.50N/07201.75W>088/036');
     expect(Aprs.from('M0LTE').item('AID #2', 49.05833333333333, -72.02916666666667).symbol('/A').killed().toTnc2()).toBe(
       'M0LTE>APZ001:)AID #2_4903.50N/07201.75WA',
     );
-    expect(Aprs.from('M0LTE').message('WU2Z', 'Testing').id('003').toTnc2()).toBe('M0LTE>APZ001::WU2Z     :Testing{003');
-    expect(Aprs.from('M0LTE').message('WU2Z', 'Hello').id(12).replyAck('34').toTnc2()).toBe('M0LTE>APZ001::WU2Z     :Hello{12}34');
+    expect(Aprs.from('M0LTE').message('WU2Z', 'Testing').messageId('003').toTnc2()).toBe('M0LTE>APZ001::WU2Z     :Testing{003');
+    expect(Aprs.from('M0LTE').message('WU2Z', 'Hello').messageId(12).replyAck('34').toTnc2()).toBe('M0LTE>APZ001::WU2Z     :Hello{12}34');
     expect(Aprs.from('M0LTE').ack('KB2ICI-14', '003').toTnc2()).toBe('M0LTE>APZ001::KB2ICI-14:ack003');
     expect(Aprs.from('M0LTE').reject('KB2ICI-14', '003').toTnc2()).toBe('M0LTE>APZ001::KB2ICI-14:rej003');
     expect(Aprs.from('M0LTE').status('Net Control Center').timestamp({ kind: 'dhm-zulu', day: 9, hour: 23, minute: 45 }).toTnc2()).toBe(
@@ -102,13 +108,13 @@ describe('builder', () => {
     expect(Aprs.from('M0LTE').status('My house').locator('io91sx', Symbols.house).toTnc2()).toBe('M0LTE>APZ001:>IO91SX/- My house');
     expect(
       Aprs.from('M0LTE')
-        .weather(49.05833333333333, -72.02916666666667, { windDirectionDegrees: 220, windSpeedMph: 4, windGustMph: 5, temperatureF: 77 })
+        .weather({ windDirectionDegrees: 220, windSpeedMph: 4, windGustMph: 5, temperatureF: 77 }, { latitude: 49.05833333333333, longitude: -72.02916666666667 })
         .toTnc2(),
     ).toBe('M0LTE>APZ001:!4903.50N/07201.75W_220/004g005t077');
     expect(Aprs.from('M0LTE').telemetry(5, [199, 0, 255, 73, 123], '01101001').toTnc2()).toBe(
       'M0LTE>APZ001:T#005,199,000,255,073,123,01101001',
     );
-    expect(Aprs.from('M0LTE').telemetryNames('M0LTE', ['Battery', 'Temp']).toTnc2()).toBe('M0LTE>APZ001::M0LTE    :PARM.Battery,Temp');
+    expect(Aprs.from('M0LTE').telemetryNames(['Battery', 'Temp']).toTnc2()).toBe('M0LTE>APZ001::M0LTE    :PARM.Battery,Temp');
     expect(Aprs.from('M0LTE').bulletin('1', 'Net tonight at 8').toTnc2()).toBe('M0LTE>APZ001::BLN1     :Net tonight at 8');
   });
 
@@ -177,7 +183,7 @@ describe('options and diagnostics', () => {
   it('keeps the hemisphere of a zero coordinate', () => {
     const packet = decodeTnc2('N0CALL>APZ001:!0000.00N\\00000.00W.');
     expect(Object.is((packet.data as { longitude: number }).longitude, -0)).toBe(true);
-    expect(decodeUtf8(encodeInformation(packet.data).info)).toBe('!0000.00N\\00000.00W.');
+    expect(decodeUtf8(encodeInformation(packet.data).information)).toBe('!0000.00N\\00000.00W.');
     expect(toNeutralData(packet.data).longitude).toBe(-0);
   });
 
@@ -201,7 +207,7 @@ describe('raw NMEA', () => {
   it('reads the text after the checksum as a comment, and writes it back', () => {
     const packet = decodeTnc2(`WB4BYQ-3>APT311:$${rmc}/Home Station by TinyTrack`);
     expect(packet.data).toMatchObject({ type: 'nmea', sentence: rmc, hasChecksum: true, comment: '/Home Station by TinyTrack' });
-    expect(decodeUtf8(encodeInformation(packet.data).info)).toBe(`$${rmc}/Home Station by TinyTrack`);
+    expect(decodeUtf8(encodeInformation(packet.data).information)).toBe(`$${rmc}/Home Station by TinyTrack`);
   });
 
   it('refuses a comment with no checksum to end the sentence, and fields the sentence does not say', () => {
@@ -216,14 +222,14 @@ describe('encoder refusals no conformance case pins', () => {
   it('refuses a capability that would not read back the same', () => {
     expect(() => encodeInformation({ type: 'capabilities', capabilities: [['IG ATE']] })).toThrow(AprsEncodeError);
     expect(() => encodeInformation({ type: 'capabilities', capabilities: [['IGATE', '43 ']] })).toThrow(AprsEncodeError);
-    expect(decodeUtf8(encodeInformation({ type: 'capabilities', capabilities: [['IGATE', '4 3']] }).info)).toBe('<IGATE=4 3');
+    expect(decodeUtf8(encodeInformation({ type: 'capabilities', capabilities: [['IGATE', '4 3']] }).information)).toBe('<IGATE=4 3');
   });
 
   it('pads an APRSH target to 9 characters and writes a target after an undefined type after a space', () => {
     const aprsh = { type: 'directed-query', addressee: 'KH2Z', queryType: 'APRSH', target: 'N0QBF' } as const;
-    expect(decodeUtf8(encodeInformation(aprsh).info)).toBe(':KH2Z     :?APRSHN0QBF    ');
+    expect(decodeUtf8(encodeInformation(aprsh).information)).toBe(':KH2Z     :?APRSHN0QBF    ');
     const other = { ...aprsh, queryType: 'FOO' };
-    expect(decodeUtf8(encodeInformation(other).info)).toBe(':KH2Z     :?FOO N0QBF');
+    expect(decodeUtf8(encodeInformation(other).information)).toBe(':KH2Z     :?FOO N0QBF');
   });
 
   it('refuses an ERP code of 0 and a third-party inner packet whose header was defective', () => {
@@ -257,10 +263,10 @@ describe('Mic-E ambiguity (vectors README, Mic-E)', () => {
       ambiguity: 2,
       symbol: { table: '/', code: '>' },
     });
-    const p = decodeTnc2(`N0CALL>${encoded.destination}:${decodeUtf8(encoded.info)}`);
+    const p = decodeTnc2(`N0CALL>${encoded.destination}:${decodeUtf8(encoded.information)}`);
     // 95 degrees 22.95 minutes, two digits blanked: the box 22.xx, centre 22.50.
-    expect(encoded.info[2]! - 28).toBe(22);
-    expect(encoded.info[3]! - 28).toBe(50);
+    expect(encoded.information[2]! - 28).toBe(22);
+    expect(encoded.information[3]! - 28).toBe(50);
     if (p.data.type !== 'mic-e') throw new Error(p.data.type);
     expect(p.data.longitude).toBeCloseTo(-(95 + 22.5 / 60), 9);
   });
@@ -270,25 +276,25 @@ describe('builder rulings (vectors rulings, B1, B2, B6)', () => {
   const info = (line: string): string => line.slice(line.indexOf(':') + 1);
 
   it('takes a course of 0 as unknown', () => {
-    expect(info(Aprs.from('N0CALL').position(49.5, -72.75).course(0).speed(10).toTnc2())).toBe('!4930.00N/07245.00W/000/010');
-    const micE = Aprs.from('N0CALL').micE(49.5, -72.75).course(0.3).speed(10).build();
+    expect(info(Aprs.from('N0CALL').position(49.5, -72.75).courseDegrees(0).speedKnots(10).toTnc2())).toBe('!4930.00N/07245.00W/000/010');
+    const micE = Aprs.from('N0CALL').micE(49.5, -72.75).courseDegrees(0.3).speedKnots(10).build();
     const back = decodeTnc2(micE.toTnc2());
     if (back.data.type !== 'mic-e') throw new Error(back.data.type);
     expect(back.data.courseDegrees).toBeUndefined();
-    expect(() => Aprs.from('N0CALL').position(49.5, -72.75).course(0).speed(10).compressed().build()).toThrow(AprsEncodeError);
+    expect(() => Aprs.from('N0CALL').position(49.5, -72.75).courseDegrees(0).speedKnots(10).compressed().build()).toThrow(AprsEncodeError);
   });
 
   it('puts Mic-E metres in the Mic-E altitude bytes and feet in a /A=', () => {
-    const metres = Aprs.from('N0CALL').micE(49.5, -72.75).altitudeMetres(100.4).build();
+    const metres = Aprs.from('N0CALL').micE(49.5, -72.75).altitudeM(100.4).build();
     expect(decodeUtf8(metres.information)).toContain('"4{}');
-    const feet = Aprs.from('N0CALL').micE(49.5, -72.75).altitude(0).build();
+    const feet = Aprs.from('N0CALL').micE(49.5, -72.75).altitudeFeet(0).build();
     expect(decodeUtf8(feet.information)).toContain('/A=000000');
   });
 
   it('converts Celsius and millimetres', () => {
-    const line = Aprs.from('N0CALL').weather(49.5, -72.75, { windDirectionDegrees: 90, windSpeedMph: 5, temperatureC: 20.3, rain1hMm: 2.54 }).toTnc2();
+    const line = Aprs.from('N0CALL').weather({ windDirectionDegrees: 90, windSpeedMph: 5, temperatureC: 20.3, rain1hMm: 2.54 }, { latitude: 49.5, longitude: -72.75 }).toTnc2();
     expect(info(line)).toBe('!4930.00N/07245.00W_090/005g...t069r010');
-    expect(() => Aprs.from('N0CALL').weather(49.5, -72.75, { temperatureC: 20, temperatureF: 68 }).build()).toThrow(AprsEncodeError);
+    expect(() => Aprs.from('N0CALL').weather({ temperatureC: 20, temperatureF: 68 } as unknown as WeatherInput, { latitude: 49.5, longitude: -72.75 }).build()).toThrow(AprsEncodeError);
   });
 
   it('refuses a telemetry sequence over 999', () => {
@@ -338,6 +344,77 @@ describe('run 2 rulings', () => {
         diagnostics: [],
       },
     });
-    expect(decodeUtf8(encoded.info)).toBe('}K1ABC>APRS:!/5L!!<*e8>{?C');
+    expect(decodeUtf8(encoded.information)).toBe('}K1ABC>APRS:!/5L!!<*e8>{?C');
+  });
+});
+
+describe('1.0 API', () => {
+  it('checks the header addresses in build(), and keeps the path as entries', () => {
+    expect(() => Aprs.from('M0LTE').to('BAD DEST').status('x').build()).toThrow(AprsEncodeError);
+    expect(() => Aprs.from('TOO-LONG-CALL').status('x').build()).toThrow(AprsEncodeError);
+    const packet = Aprs.from('M0LTE').via('WIDE1-1*', { address: 'WIDE2-1', used: false }).status('x').build();
+    expect(packet.path).toEqual([
+      { address: 'WIDE1-1', used: true },
+      { address: 'WIDE2-1', used: false },
+    ]);
+    expect(packet.toTnc2()).toBe('M0LTE>APZ001,WIDE1-1*,WIDE2-1:>x');
+  });
+
+  it('refuses a weather value in two units, in the type and at build()', () => {
+    // @ts-expect-error a temperature in both units does not compile
+    const clash: WeatherInput = { temperatureF: 61, temperatureC: 16 };
+    expect(() => Aprs.from('M0LTE').weather(clash).build()).toThrow(AprsEncodeError);
+    const ok: WeatherInput = { temperatureC: 16, rain1hMm: 1 };
+    expect(ok.temperatureC).toBe(16);
+    // a decoded Weather is still a WeatherInput
+    const decoded = decodeTnc2('M0LTE>APZ001:!5127.00N/00058.80W_220/004g005t061');
+    if (decoded.data.type !== 'position' || !decoded.data.weather) throw new Error('no weather');
+    expect(Aprs.from('M0LTE').weather(decoded.data.weather, { latitude: 51.45, longitude: -0.98 }).toTnc2()).toContain('_220/004g005t061');
+  });
+
+  it('builds weather with and without a position from one method', () => {
+    const at = new Date(Date.UTC(2026, 10, 10, 12, 30));
+    expect(Aprs.from('M0LTE').weather({ temperatureF: 61 }, { at }).toTnc2()).toBe('M0LTE>APZ001:_11101230c...s...g...t061');
+    expect(Aprs.from('M0LTE').weather({ temperatureF: 61 }, { latitude: 51.45, longitude: -0.98 }).toTnc2()).toBe(
+      'M0LTE>APZ001:!5127.00N/00058.80W_.../...g...t061',
+    );
+  });
+
+  it('takes the telemetry metadata addressee last, defaulting to the station', () => {
+    expect(Aprs.from('M0LTE').telemetryUnits(['V', 'C'], 'G4ABC').toTnc2()).toBe('M0LTE>APZ001::G4ABC    :UNIT.V,C');
+    expect(Aprs.from('M0LTE').telemetryCoefficients([0, 1, 0]).toTnc2()).toBe('M0LTE>APZ001::M0LTE    :EQNS.0,1,0');
+    expect(Aprs.from('M0LTE').telemetryBits('11111111', 'Project').toTnc2()).toBe('M0LTE>APZ001::M0LTE    :BITS.11111111,Project');
+  });
+
+  it('keeps where a Mic-E altitude was written in the data', () => {
+    const built = Aprs.from('N0CALL').micE(49.5, -72.75).altitudeFeet(100).build();
+    if (built.data.type !== 'mic-e') throw new Error(built.data.type);
+    expect(built.data.altitudeInComment).toBe(true);
+    const copy = encodeInformation({ ...built.data });
+    expect(decodeUtf8(copy.information)).toBe(decodeUtf8(built.information));
+    const decoded = decodeTnc2(built.toTnc2());
+    if (decoded.data.type !== 'mic-e') throw new Error(decoded.data.type);
+    expect(decoded.data.altitudeInComment).toBe(true);
+    const metres = decodeTnc2(Aprs.from('N0CALL').micE(49.5, -72.75).altitudeM(100).toTnc2());
+    if (metres.data.type !== 'mic-e') throw new Error(metres.data.type);
+    expect(metres.data.altitudeInComment).toBeUndefined();
+  });
+
+  it('writes a received packet back as received', () => {
+    const line = 'N1EOE>APN391,N1NCI-3*,WIDE2-1:!4216.95N/07243.20W#PHG6230 Easthampton MA';
+    const packet = decodeTnc2(line);
+    expect(packetToTnc2(packet)).toBe(line);
+    expect(decodeAx25(packetToAx25(packet)).path).toEqual(packet.path);
+    expect(hasErrors(packet)).toBe(false);
+    expect(hasWarnings(packet)).toBe(false);
+    if (packet.data.type !== 'position' || !packet.data.phg) throw new Error('no phg');
+    expect(phgValues(packet.data.phg)).toEqual({ watts: 36, heightFeet: 40, gainDb: 3, directivityDegrees: null });
+    expect(hasWarnings(decodeTnc2('N1EOE>APN391:!4216.95n/07243.20w#'))).toBe(true);
+    expect(() => packetToAx25(decodeTnc2('WB4APR-00>APRS:>x'))).toThrow(AprsEncodeError);
+  });
+
+  it('defaults the options of decodeInformation', () => {
+    const decoded = decodeInformation(encodeUtf8('>hello'), 'APRS');
+    expect(decoded.data).toEqual({ type: 'status', text: 'hello' });
   });
 });
