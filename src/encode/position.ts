@@ -588,6 +588,7 @@ function weatherBody(f: PositionedFields): Body {
       // With no comment to hold a /A=, the nearest value the cs bytes hold (vectors rulings, F14).
       cs = ggaAltitude(f.altitudeFeet).cs;
       altitudeInCs = true;
+      if (f.rangeMiles !== undefined) flag('extension-conflict', 'the cs bytes hold the altitude, so they cannot hold a range');
     } else if (f.rangeMiles !== undefined) {
       if (compression?.source === 'gga') flag('extension-conflict', 'a GGA compression type means the cs bytes hold altitude');
       cs = compressedRange(f.rangeMiles);
