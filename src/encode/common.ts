@@ -129,7 +129,7 @@ export function whole(
   if (!Number.isFinite(value)) flag('not-a-number', `${what} is not a number`);
   const n = nearest(value);
   if (n === noForm) flag('value-has-no-form', `${what} ${value} is out of range (${min}-${max})`);
-  if (n < min || n > max) flag(outside, `${what} ${value} is out of range (${min}-${max})`);
+  else if (n < min || n > max) flag(outside, `${what} ${value} is out of range (${min}-${max})`);
   return n;
 }
 

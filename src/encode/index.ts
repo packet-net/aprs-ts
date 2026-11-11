@@ -251,11 +251,6 @@ export function encodeInformation(data: AprsData): EncodedInformation {
       }
     }
   }
-  // A Mic-E report whose symbol is the weather one, with no weather, that does not read back: the
-  // symbol is the reason, not the text (it reads back only when nothing else is amiss).
-  if (problems.length > 0 && data.type === 'mic-e' && data.symbol.code === '_' && !data.weather) {
-    refuse('symbol-mismatch', `the weather station symbol (_) needs weather data: ${problems.map((p) => p.text).join('; ')}`);
-  }
   if (problems.length > 0) refuse(firstRefusal(problems).code, `it would not read back the same: ${problems.map((p) => p.text).join('; ')}`);
   const information = binaryToBytes(chosen.binary);
   return chosen.destination !== undefined ? { information, destination: chosen.destination } : { information };

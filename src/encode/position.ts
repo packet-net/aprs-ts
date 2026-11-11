@@ -425,7 +425,8 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
   const isWeather = f.symbol.code === '_';
   if (f.weather && !isWeather) flag('symbol-mismatch', 'weather data needs the weather station symbol (_)');
   if (isWeather && !f.weather) flag('symbol-mismatch', 'the weather station symbol (_) needs weather data');
-  if (isWeather && f.weather) return weatherBody(f);
+  // Weather data is a weather report whatever the symbol, so its rules apply too.
+  if (f.weather) return weatherBody(f);
   const exts = hasExtension(f);
   // DF and storm data extend a course/speed, so they count as that extension (vectors rulings, F7).
   const hasCourse = f.courseDegrees !== undefined || f.speedKnots !== undefined || (!f.compressed && (f.dfBearing !== undefined || f.storm !== undefined));
@@ -433,6 +434,8 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
   if (f.compressed) {
     if (hasCourse && f.rangeMiles !== undefined) flag('extension-conflict', 'course/speed and a range both want the cs bytes');
   } else if (exts.length + (hasCourse ? 1 : 0) > 1) flag('extension-conflict', `only one data extension can follow the symbol (${[hasCourse ? 'course/speed' : '', ...exts].filter(Boolean).join(', ')})`);
+  if (!f.compressed && f.dfBearing && f.storm) flag('extension-conflict', 'DF and storm data both extend the course/speed');
+  if (!f.compressed && hasCourse && f.area === undefined && f.symbol.table === '\\' && f.symbol.code === 'l') flag('symbol-mismatch', 'course/speed on the area symbol (\\l) would read back as an area');
   if (f.dfBearing && !(f.symbol.table === '/' && f.symbol.code === '\\')) flag('symbol-mismatch', 'a DF bearing needs the DF symbol (/\\)');
   if (f.storm && !(f.symbol.code === '@' && (f.symbol.table === '/' || f.symbol.table === '\\'))) flag('symbol-mismatch', 'storm data needs a hurricane symbol (/@ or \\@)');
   if (f.signpost !== undefined && !(f.symbol.table === '\\' && f.symbol.code === 'm')) flag('symbol-mismatch', 'a signpost needs the signpost symbol (\\m)');
@@ -453,6 +456,7 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
       // 0 (after rounding) would read back as 360 (vectors rulings, F1, F5).
       if (f.courseDegrees === undefined) flag('missing-field', 'a compressed course/speed needs a course');
       if (f.speedKnots === undefined) flag('missing-field', 'a compressed course/speed needs a speed');
+      if (f.rangeMiles !== undefined) compressedRange(f.rangeMiles);
       const courseDegrees = f.courseDegrees ?? 0;
       const speedKnots = f.speedKnots ?? 0;
       if (compression?.source === 'gga') flag('extension-conflict', 'a GGA compression type means the cs bytes hold altitude');
@@ -714,6 +718,7 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   const lon = digitsOf(d.longitude, digits, ambiguity);
   if (lat.degrees > 90 || (lat.degrees === 90 && lat.hundredths > 0)) flag('value-out-of-range', 'latitude is out of range');
   if (lon.degrees > 179) flag('value-has-no-form', 'Mic-E longitude is below 180 degrees');
+  if (ambiguity > 0 && lat.degrees === 90) flag('value-has-no-form', 'an ambiguous position at the pole has no form');
   const destination = micEDestination(d, lat, lon.degrees);
   // Longitude
   const deg = lon.degrees;
