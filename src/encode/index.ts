@@ -10,7 +10,7 @@ import { isAprsIsAddress } from '../header.js';
 import { toNeutralData } from '../neutral.js';
 import type { RefusalCode } from '../codes.js';
 import type { AprsData, CompressionType, PathEntry } from '../types.js';
-import { AprsEncodeError, DEFAULT_DESTINATION, refuse } from './common.js';
+import { AprsEncodeError, collect, DEFAULT_DESTINATION, firstRefusal, refuse } from './common.js';
 import {
   encodeAck,
   encodeAgrelo,
@@ -28,6 +28,7 @@ import {
   encodeTelemetryNames,
   encodeTelemetryReport,
   encodeTest,
+  checkThirdPartyHeader,
   encodeThirdParty,
   encodeUserDefined,
 } from './other.js';
@@ -54,6 +55,10 @@ function withCompression(b: { text: string; compression?: CompressionType }): At
 }
 
 function attempt(data: AprsData, mode: CommentMode): Attempt {
+  return collect(() => attemptOnce(data, mode));
+}
+
+function attemptOnce(data: AprsData, mode: CommentMode): Attempt {
   switch (data.type) {
     case 'position':
       return withCompression(encodePositionReport(data, mode));
@@ -104,6 +109,8 @@ function attempt(data: AprsData, mode: CommentMode): Attempt {
       const original = data.packet.information;
       const inner = data.packet.data;
       const asReceived = original.length > 0 || (inner.type === 'unrecognized' && inner.reason === 'empty');
+      // The inner header is checked before the inner data: the header is written first.
+      checkThirdPartyHeader(data);
       const info = asReceived ? original : encodeInformation(inner).information;
       return { binary: encodeThirdParty(data, bytesToBinary(info)) };
     }
@@ -130,6 +137,9 @@ interface Problem {
   readonly text: string;
 }
 
+/** Fields that hold free text; one that reads back changed or lost is text that read as something else. */
+const FREE_TEXT_FIELDS: ReadonlySet<string> = new Set(['comment', 'text', 'data', 'project', 'software', 'unit', 'names', 'units', 'extra', 'status']);
+
 function problem(code: RefusalCode, text: string): Problem {
   return { code, text };
 }
@@ -153,7 +163,7 @@ function shapeDifferences(a: unknown, b: unknown, path: string, out: Problem[], 
     const ao = a as Record<string, unknown>;
     const bo = b as Record<string, unknown>;
     for (const k of new Set([...Object.keys(ao), ...Object.keys(bo)])) {
-      if (!(k in ao)) out.push(problem('field-not-allowed', `${path}${k} would be lost`));
+      if (!(k in ao)) out.push(problem(FREE_TEXT_FIELDS.has(k) ? 'text-reads-as-field' : 'does-not-read-back', `${path}${k} would be lost`));
       else if (!(k in bo)) out.push(problem('text-reads-as-field', `${path}${k} would appear`));
       else shapeDifferences(ao[k], bo[k], `${path}${k}.`, out, numbers);
     }
@@ -195,7 +205,10 @@ function check(data: AprsData, a: Attempt): Problem[] {
     return problems;
   }
   // An NMEA sentence is written as it is, so everything read from it must be what the data says.
-  shapeDifferences(withoutInnerInfo(toNeutralData(decoded.data)), withoutInnerInfo(toNeutralData(expected(data, a))), '', problems, data.type === 'nmea');
+  const shape: Problem[] = [];
+  shapeDifferences(withoutInnerInfo(toNeutralData(decoded.data)), withoutInnerInfo(toNeutralData(expected(data, a))), '', shape, data.type === 'nmea');
+  // Whatever differs in a sentence read back is a field that disagrees with it.
+  for (const p of shape) problems.push(data.type === 'nmea' ? problem('invalid-nmea', p.text) : p);
   return problems;
 }
 
@@ -238,7 +251,12 @@ export function encodeInformation(data: AprsData): EncodedInformation {
       }
     }
   }
-  if (problems.length > 0) refuse(problems[0]!.code, `it would not read back the same: ${problems.map((p) => p.text).join('; ')}`);
+  // A Mic-E report whose symbol is the weather one, with no weather, that does not read back: the
+  // symbol is the reason, not the text (it reads back only when nothing else is amiss).
+  if (problems.length > 0 && data.type === 'mic-e' && data.symbol.code === '_' && !data.weather) {
+    refuse('symbol-mismatch', `the weather station symbol (_) needs weather data: ${problems.map((p) => p.text).join('; ')}`);
+  }
+  if (problems.length > 0) refuse(firstRefusal(problems).code, `it would not read back the same: ${problems.map((p) => p.text).join('; ')}`);
   const information = binaryToBytes(chosen.binary);
   return chosen.destination !== undefined ? { information, destination: chosen.destination } : { information };
 }

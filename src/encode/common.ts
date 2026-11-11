@@ -23,6 +23,80 @@ export function refuse(code: RefusalCode, reason: string): never {
   throw new AprsEncodeError(reason, code);
 }
 
+/**
+ * The order in which several faults in one packet are reported: the first code that applies wins
+ * (vectors refusals: DESIGN rulings, R1). The header comes first, a field wrong on its own is
+ * wrong whatever else is given, then what the frame cannot hold, then the companions, and the
+ * read-back safety nets last.
+ */
+const REFUSAL_ORDER: readonly RefusalCode[] = [
+  'not-encodable',
+  'invalid-address', 'ax25-cannot-carry', 'tnc2-cannot-carry', 'invalid-third-party-header',
+  'invalid-addressee', 'invalid-name', 'invalid-timestamp', 'not-a-number', 'value-out-of-range',
+  'value-has-no-form', 'invalid-code', 'invalid-symbol', 'invalid-character', 'too-long',
+  'padding-space', 'malformed', 'invalid-message-id', 'invalid-nmea',
+  'extension-conflict', 'field-not-allowed', 'symbol-mismatch', 'missing-field', 'value-given-twice',
+  'text-reads-as-field',
+  'does-not-read-back',
+];
+
+/** Where a code sits in the reporting order; a code outside it comes last. */
+export function refusalRank(code: RefusalCode): number {
+  const i = REFUSAL_ORDER.indexOf(code);
+  return i < 0 ? REFUSAL_ORDER.length : i;
+}
+
+/** The refusal that comes first in the reporting order (the earliest among equals). */
+export function firstRefusal<T extends { readonly code: RefusalCode }>(all: readonly T[]): T {
+  let best = all[0]!;
+  for (const e of all) if (refusalRank(e.code) < refusalRank(best.code)) best = e;
+  return best;
+}
+
+/** The code for a value that fails a range check: not-a-number for NaN or an infinity, else out of range. */
+export function numberFault(value: number): RefusalCode {
+  return Number.isFinite(value) ? 'value-out-of-range' : 'not-a-number';
+}
+
+let faults: AprsEncodeError[] | undefined;
+
+/**
+ * Notes a fault and carries on, so that every fault in the data is found and the one that comes
+ * first in the reporting order is the one reported. Outside `collect` it refuses at once.
+ */
+export function flag(code: RefusalCode, reason: string): void {
+  const e = new AprsEncodeError(reason, code);
+  if (faults === undefined) throw e;
+  faults.push(e);
+}
+
+/**
+ * Runs an encoder step, and refuses with the first-ranked of the faults it flagged or threw. A
+ * step that goes wrong on the way past a flagged fault (data it cannot use) is not reported.
+ */
+export function collect<T>(step: () => T): T {
+  const outer = faults;
+  const mine: AprsEncodeError[] = [];
+  faults = mine;
+  let result: T | undefined;
+  let other: unknown;
+  let failed = false;
+  try {
+    result = step();
+  } catch (e) {
+    if (e instanceof AprsEncodeError) mine.push(e);
+    else {
+      failed = true;
+      other = e;
+    }
+  } finally {
+    faults = outer;
+  }
+  if (mine.length > 0) throw firstRefusal(mine);
+  if (failed) throw other;
+  return result as T;
+}
+
 export function pad(n: number, width: number): string {
   return String(n).padStart(width, '0');
 }
@@ -52,16 +126,16 @@ export function whole(
   outside: RefusalCode = 'value-out-of-range',
   noForm?: number,
 ): number {
-  if (!Number.isFinite(value)) refuse('value-out-of-range', `${what} is not a number`);
+  if (!Number.isFinite(value)) flag('not-a-number', `${what} is not a number`);
   const n = nearest(value);
-  if (n === noForm) refuse('value-has-no-form', `${what} ${value} is out of range (${min}-${max})`);
-  if (n < min || n > max) refuse(outside, `${what} ${value} is out of range (${min}-${max})`);
+  if (n === noForm) flag('value-has-no-form', `${what} ${value} is out of range (${min}-${max})`);
+  if (n < min || n > max) flag(outside, `${what} ${value} is out of range (${min}-${max})`);
   return n;
 }
 
 /** Free text as UTF-8 bytes (a binary string); refuses a line break, which receivers strip. */
 export function freeText(text: string, what: string): string {
-  if (/[\r\n]/.test(text)) refuse('invalid-character', `${what} contains a line break`);
+  if (/[\r\n]/.test(text)) flag('invalid-character', `${what} contains a line break`);
   return encodeUtf8Binary(text);
 }
 
@@ -80,7 +154,7 @@ export function isValidTimestamp(t: AprsTimestamp): boolean {
 
 /** A 7-byte timestamp for a position or object report. */
 export function timestamp7(t: AprsTimestamp): string {
-  if (!isValidTimestamp(t)) refuse('invalid-timestamp', 'the timestamp is out of range');
+  if (!isValidTimestamp(t)) flag('invalid-timestamp', 'the timestamp is out of range');
   switch (t.kind) {
     case 'dhm-zulu':
       return `${pad(t.day, 2)}${pad(t.hour, 2)}${pad(t.minute, 2)}z`;
@@ -94,12 +168,12 @@ export function timestamp7(t: AprsTimestamp): string {
 }
 
 export function checkSymbol(symbol: AprsSymbol): void {
-  if (symbol.code.length !== 1 || symbol.table.length !== 1) refuse('invalid-symbol', 'a symbol is a table and a code, one character each');
+  if (symbol.code.length !== 1 || symbol.table.length !== 1) flag('invalid-symbol', 'a symbol is a table and a code, one character each');
   const code = symbol.code.charCodeAt(0);
-  if (code < 0x21 || code > 0x7e) refuse('invalid-symbol', 'the symbol code is not printable ASCII');
+  if (code < 0x21 || code > 0x7e) flag('invalid-symbol', 'the symbol code is not printable ASCII');
   const t = symbol.table;
   const ok = t === '/' || t === '\\' || (t >= '0' && t <= '9') || (t >= 'A' && t <= 'Z');
-  if (!ok) refuse('invalid-symbol', `the symbol table ${JSON.stringify(t)} is not /, \\, 0-9 or A-Z`);
+  if (!ok) flag('invalid-symbol', `the symbol table ${JSON.stringify(t)} is not /, \\, 0-9 or A-Z`);
 }
 
 export function base91(value: number, width: number): string {
@@ -118,7 +192,7 @@ export function base91(value: number, width: number): string {
  * `1` and 61 zeros, 1e-7 as `0.0000001`; vectors rulings, F11).
  */
 export function numberText(v: number): string {
-  if (!Number.isFinite(v)) refuse('value-out-of-range', 'a value is not a number');
+  if (!Number.isFinite(v)) flag('not-a-number', 'a value is not a number');
   if (Object.is(v, -0)) return '0';
   const shortest = String(v);
   const m = /^(-?)([0-9])(?:\.([0-9]+))?e([+-][0-9]+)$/.exec(shortest);

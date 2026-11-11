@@ -362,7 +362,6 @@ function positioned(b, args, report) {
   if (args.speed_knots !== undefined && args.speed_kmh !== undefined) unsupported('speed_kmh', 'given with speed_knots');
   if (args.speed_knots !== undefined) b.speedKnots(args.speed_knots);
   if (args.speed_kmh !== undefined) b.speedKmh(args.speed_kmh);
-  if (args.altitude_feet !== undefined && args.altitude_m !== undefined) unsupported('altitude_m', 'given with altitude_feet');
   if (args.altitude_feet !== undefined) b.altitudeFeet(args.altitude_feet);
   if (args.altitude_m !== undefined) b.altitudeM(args.altitude_m);
   if (args.comment !== undefined) b.comment(args.comment);

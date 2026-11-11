@@ -13,7 +13,7 @@
 // `build()` encodes the packet, so anything the spec does not allow is refused there, with an
 // `AprsEncodeError` that says why.
 
-import { DEFAULT_DESTINATION, nearest, refuse } from './encode/common.js';
+import { DEFAULT_DESTINATION, nearest, numberFault, refuse } from './encode/common.js';
 import { ax25Of, checkHeaderAddresses, encodeInformation, tnc2BytesOf, tnc2TextOf, wrapKiss } from './encode/index.js';
 import { symbolOf } from './symbols.js';
 import type {
@@ -348,6 +348,7 @@ abstract class PositionedBuilder<Self> {
   /** Altitude, feet, sent as a `/A=` in whole feet (rounded to the nearest, halves away from zero). */
   altitudeFeet(feet: number): Self {
     this.fields.altitudeFeet = feet;
+    if (this.altitudeUnit === 'metres') this.altitudeTwice = true;
     this.altitudeUnit = 'feet';
     return this.self();
   }
@@ -358,12 +359,20 @@ abstract class PositionedBuilder<Self> {
    */
   altitudeM(metres: number): Self {
     this.fields.altitudeFeet = metres / 0.3048;
+    if (this.altitudeUnit === 'feet') this.altitudeTwice = true;
     this.altitudeUnit = 'metres';
     return this.self();
   }
 
   /** The unit the altitude was given in. */
   protected altitudeUnit: 'feet' | 'metres' | undefined;
+
+  private altitudeTwice = false;
+
+  /** An altitude given in feet and in metres is refused, as a weather value in two units is. */
+  protected checkAltitudeUnits(): void {
+    if (this.altitudeTwice) refuse('value-given-twice', 'the altitude is given in two units');
+  }
 
   /** Free text. */
   comment(text: string): Self {
@@ -452,6 +461,7 @@ export class PositionBuilder extends ReportBuilder<PositionBuilder> {
   }
 
   build(): BuiltPacket {
+    this.checkAltitudeUnits();
     const data: Mutable<Extract<AprsData, { type: 'position' }>> = { type: 'position', ...this.fields };
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.timestampValue) data.timestamp = this.timestampValue;
@@ -495,6 +505,7 @@ export class ObjectBuilder extends ReportBuilder<ObjectBuilder> {
   }
 
   build(): BuiltPacket {
+    this.checkAltitudeUnits();
     const data: Mutable<Extract<AprsData, { type: 'object' }>> = {
       type: 'object',
       name: this.name,
@@ -535,6 +546,7 @@ export class ItemBuilder extends ReportBuilder<ItemBuilder> {
   }
 
   build(): BuiltPacket {
+    this.checkAltitudeUnits();
     const data: Mutable<Extract<AprsData, { type: 'item' }>> = { type: 'item', name: this.name, ...this.fields };
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.killedValue) data.killed = true;
@@ -582,6 +594,7 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
   }
 
   build(): BuiltPacket {
+    this.checkAltitudeUnits();
     const data: Mutable<Extract<AprsData, { type: 'mic-e' }>> = { type: 'mic-e', micEMessage: this.messageValue, ...this.fields };
     // A course of 0 (after rounding) is unknown, which Mic-E writes as 0: no course (B1).
     if (data.courseDegrees !== undefined && Number.isFinite(data.courseDegrees) && nearest(data.courseDegrees) === 0) delete data.courseDegrees;
@@ -703,7 +716,7 @@ export class TelemetryBuilder {
 
   build(): BuiltPacket {
     const number = this.sequence;
-    if (!Number.isInteger(number) || number < 0 || number > 999) refuse('value-out-of-range', `telemetry sequence ${String(number)} is not 0-999`);
+    if (!Number.isInteger(number) || number < 0 || number > 999) refuse(numberFault(number), `telemetry sequence ${String(number)} is not 0-999`);
     const sequence = String(number).padStart(3, '0');
     const data: Mutable<Extract<AprsData, { type: 'telemetry' }>> = {
       type: 'telemetry',

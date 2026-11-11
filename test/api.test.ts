@@ -453,6 +453,15 @@ describe('1.0 API', () => {
       expect(codeOf(info({ type: 'unrecognized', reason: 'x', raw: 'x' } as never))).toBe('not-encodable');
     });
 
+    it('reports the first-ranked of several faults', () => {
+      // A bad addressee comes before a text that is too long, and a missing ID before neither.
+      expect(codeOf(info({ type: 'message', addressee: 'A:B', text: 'x'.repeat(68) }))).toBe('invalid-addressee');
+      expect(codeOf(info({ type: 'message', addressee: 'NWS-WARN', text: 'x' }))).toBe('invalid-addressee');
+      expect(codeOf(info({ type: 'message', addressee: 'N0CALL', text: 'x', replyAck: '1' }))).toBe('missing-field');
+      expect(codeOf(info({ type: 'telemetry', sequence: 'MIC', analog: [null, 1, 2, 3, 4], bits: '01010101' }))).toBe('value-has-no-form');
+      expect(codeOf(info({ type: 'capabilities', capabilities: [['A B']] } as never))).toBe('malformed');
+    });
+
     it('names AX.25 and TNC2 refusals', () => {
       expect(codeOf(() => encodeAx25({ source: 'TOOLONGCALL', destination: 'APRS', path: [], data: { type: 'status', text: 'x' } } as never))).toBe('ax25-cannot-carry');
       expect(codeOf(() => packetToAx25(decodeTnc2('WB4APR-00>APRS:>x')))).toBe('ax25-cannot-carry');
