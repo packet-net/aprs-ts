@@ -532,7 +532,11 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
     braces = `{${whole(f.area.corridorWidthMiles, 0, 999, 'corridor width')}}`;
   }
   text += braces;
-  if (f.altitudeFeet !== undefined && !altitudeInCs) text += altitudeText(f.altitudeFeet);
+  // With a GGA compression type the altitude belongs in the cs bytes, whose limit is its own; if
+  // a course or range wants them too, that conflict is the fault, not the /A= limit.
+  const csWanted = compression?.source === 'gga' && (hasCourse || f.rangeMiles !== undefined);
+  const fitsCs = f.altitudeFeet !== undefined && Number.isFinite(f.altitudeFeet) && (f.altitudeFeet <= 1 || nearest(Math.log(f.altitudeFeet) / Math.log(1.002)) <= 91 * 91 - 1);
+  if (f.altitudeFeet !== undefined && !altitudeInCs && !(csWanted && fitsCs)) text += altitudeText(f.altitudeFeet);
   const comment = f.comment ?? '';
   if (comment.length > 0 || mode === 'delimited') {
     // After a frequency (and anything after it) the free text follows a space, unless that would
@@ -583,7 +587,10 @@ function weatherBody(f: PositionedFields): Body {
       cs = compressedDirection(windDirection) + compressedSpeed((w.windSpeedMph ?? 0) / KNOTS_TO_MPH, 'wind speed');
       compression = compression ?? DEFAULT_COMPRESSION;
       if (compression.source === 'gga') flag('extension-conflict', 'a GGA compression type means the cs bytes hold altitude');
-      if (f.rangeMiles !== undefined) flag('extension-conflict', 'the cs bytes hold the wind, so they cannot hold a range');
+      if (f.rangeMiles !== undefined) {
+        compressedRange(f.rangeMiles);
+        flag('extension-conflict', 'the cs bytes hold the wind, so they cannot hold a range');
+      }
     } else if (f.altitudeFeet !== undefined && compression?.source === 'gga') {
       // With no comment to hold a /A=, the nearest value the cs bytes hold (vectors rulings, F14).
       cs = ggaAltitude(f.altitudeFeet).cs;
