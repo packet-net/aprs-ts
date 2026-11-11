@@ -435,7 +435,7 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
     if (hasCourse && f.rangeMiles !== undefined) flag('extension-conflict', 'course/speed and a range both want the cs bytes');
   } else if (exts.length + (hasCourse ? 1 : 0) > 1) flag('extension-conflict', `only one data extension can follow the symbol (${[hasCourse ? 'course/speed' : '', ...exts].filter(Boolean).join(', ')})`);
   if (!f.compressed && f.dfBearing && f.storm) flag('extension-conflict', 'DF and storm data both extend the course/speed');
-  if (!f.compressed && hasCourse && f.area === undefined && f.symbol.table === '\\' && f.symbol.code === 'l') flag('symbol-mismatch', 'course/speed on the area symbol (\\l) would read back as an area');
+  if (!f.compressed && f.courseDegrees !== undefined && f.area === undefined && f.symbol.table === '\\' && f.symbol.code === 'l') flag('symbol-mismatch', 'course/speed on the area symbol (\\l) would read back as an area');
   if (f.dfBearing && !(f.symbol.table === '/' && f.symbol.code === '\\')) flag('symbol-mismatch', 'a DF bearing needs the DF symbol (/\\)');
   if (f.storm && !(f.symbol.code === '@' && (f.symbol.table === '/' || f.symbol.table === '\\'))) flag('symbol-mismatch', 'storm data needs a hurricane symbol (/@ or \\@)');
   if (f.signpost !== undefined && !(f.symbol.table === '\\' && f.symbol.code === 'm')) flag('symbol-mismatch', 'a signpost needs the signpost symbol (\\m)');
@@ -595,7 +595,10 @@ function weatherBody(f: PositionedFields): Body {
       // With no comment to hold a /A=, the nearest value the cs bytes hold (vectors rulings, F14).
       cs = ggaAltitude(f.altitudeFeet).cs;
       altitudeInCs = true;
-      if (f.rangeMiles !== undefined) flag('extension-conflict', 'the cs bytes hold the altitude, so they cannot hold a range');
+      if (f.rangeMiles !== undefined) {
+        compressedRange(f.rangeMiles);
+        flag('extension-conflict', 'the cs bytes hold the altitude, so they cannot hold a range');
+      }
     } else if (f.rangeMiles !== undefined) {
       if (compression?.source === 'gga') flag('extension-conflict', 'a GGA compression type means the cs bytes hold altitude');
       cs = compressedRange(f.rangeMiles);
@@ -775,7 +778,11 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   let altitudeInComment: number | undefined;
   if (d.altitudeFeet !== undefined) {
     const alt = d.altitudeInComment ? undefined : micEAltitude(d.altitudeFeet);
-    if (alt !== undefined) text += alt;
+    if (alt !== undefined) {
+      // With no type code the first altitude byte would be read as one.
+      if (d.typeCode === undefined && text.length === 0 && '`\'>] '.includes(alt[0]!)) flag('value-has-no-form', 'a Mic-E altitude whose first byte is a type code character has no form');
+      text += alt;
+    }
     else altitudeInComment = d.altitudeFeet;
   }
   let after = '';
