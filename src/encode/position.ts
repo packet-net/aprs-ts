@@ -780,7 +780,7 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
     const alt = d.altitudeInComment ? undefined : micEAltitude(d.altitudeFeet);
     if (alt !== undefined) {
       // With no type code the first altitude byte would be read as one.
-      if (d.typeCode === undefined && text.length === 0 && '`\'>] '.includes(alt[0]!)) flag('value-has-no-form', 'a Mic-E altitude whose first byte is a type code character has no form');
+      if (d.typeCode === undefined && text.length === 0 && '`\'>] '.includes(alt[0]!) && !(nearest(d.altitudeFeet) >= -99999 && nearest(d.altitudeFeet) <= 999999)) flag('value-has-no-form', 'a Mic-E altitude whose first byte is a type code character has no form');
       text += alt;
     }
     else altitudeInComment = d.altitudeFeet;
@@ -828,6 +828,7 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   const legacy = d.legacyTelemetry !== undefined && d.legacyTelemetry.length > 0;
   if (!legacy && text.startsWith('\x1d') && mode !== 'delimited') return encodeMicE(d, 'delimited');
   info += text;
+  if (/[\r\n]$/.test(info)) flag('invalid-character', 'a Mic-E information field cannot end in a line break');
   return { text: info, destination };
 }
 
