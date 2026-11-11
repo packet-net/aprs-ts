@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+1.0.1: refusals carry a reason code. `AprsEncodeError` has a new read-only `code` property, a `RefusalCode` from the shared list of 26 in the conformance vectors' `codes.json` (`refusals`), so a program can tell why the encoder or a builder refused without reading the message. `RefusalCode`, `REFUSAL_CODES` and `REFUSAL_MEANINGS` are exported. Additive only: the error class, its message text and every signature are unchanged. `code` is `does-not-read-back` only where the library's own read-back check fails and no named rule applies. New codes may be added in later 1.x releases, so allow an unknown one.
+
 ## 1.0.0 (2026-11-10)
 
 This is the first stable release. The public API is now frozen under semantic versioning. From 1.0 the major and minor version are shared with aprs-vectors: a ruling round is a minor version for all five implementations, this library's own fixes are patch versions, and an API break is a major version.

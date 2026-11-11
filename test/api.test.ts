@@ -4,6 +4,9 @@ import { describe, expect, it } from 'vitest';
 import {
   acceptsOverlay,
   AprsEncodeError,
+  REFUSAL_CODES,
+  REFUSAL_MEANINGS,
+  type RefusalCode,
   AprsHeaderError,
   Aprs,
   decodeAx25,
@@ -416,5 +419,47 @@ describe('1.0 API', () => {
   it('defaults the options of decodeInformation', () => {
     const decoded = decodeInformation(encodeUtf8('>hello'), 'APRS');
     expect(decoded.data).toEqual({ type: 'status', text: 'hello' });
+  });
+
+  describe('refusal codes', () => {
+    const codeOf = (fn: () => unknown): RefusalCode => {
+      try {
+        fn();
+      } catch (e) {
+        if (e instanceof AprsEncodeError) return e.code;
+        throw e;
+      }
+      throw new Error('not refused');
+    };
+    const info = (data: Parameters<typeof encodeInformation>[0]): (() => unknown) => () => encodeInformation(data);
+    const sym = { table: '/', code: '>' };
+
+    it('lists 26 codes with a meaning each', () => {
+      expect(REFUSAL_CODES).toHaveLength(26);
+      for (const c of REFUSAL_CODES) expect(REFUSAL_MEANINGS[c].length).toBeGreaterThan(0);
+    });
+
+    it('names the reason for a representative refusal from each group', () => {
+      const pos = { type: 'position', latitude: 51, longitude: -1, symbol: sym } as const;
+      expect(codeOf(info({ ...pos, latitude: 91 }))).toBe('value-out-of-range');
+      expect(codeOf(info({ ...pos, symbol: { table: '!', code: '>' } }))).toBe('invalid-symbol');
+      expect(codeOf(info({ ...pos, comment: 'a\nb' }))).toBe('invalid-character');
+      expect(codeOf(info({ type: 'message', addressee: '', text: 'x' }))).toBe('invalid-addressee');
+      expect(codeOf(info({ type: 'message', addressee: 'N0CALL', text: 'x', messageId: '123456' }))).toBe('invalid-message-id');
+      expect(codeOf(info({ type: 'message', addressee: 'N0CALL', text: 'x'.repeat(68) }))).toBe('too-long');
+      expect(codeOf(info({ type: 'status', text: 'x', locator: 'ZZ99', symbol: sym }))).toBe('malformed');
+      expect(codeOf(info({ type: 'object', name: 'OBJ', symbol: sym, latitude: 51, longitude: -1 } as never))).toBe('missing-field');
+      expect(codeOf(info({ type: 'object', name: 'OBJ ', timestamp: { kind: 'dhm-zulu', day: 1, hour: 1, minute: 1 }, symbol: sym, latitude: 51, longitude: -1 } as never))).toBe('padding-space');
+      expect(codeOf(info({ type: 'unrecognized', reason: 'x', raw: 'x' } as never))).toBe('not-encodable');
+    });
+
+    it('names AX.25 and TNC2 refusals', () => {
+      expect(codeOf(() => encodeAx25({ source: 'TOOLONGCALL', destination: 'APRS', path: [], data: { type: 'status', text: 'x' } } as never))).toBe('ax25-cannot-carry');
+      expect(codeOf(() => packetToAx25(decodeTnc2('WB4APR-00>APRS:>x')))).toBe('ax25-cannot-carry');
+    });
+
+    it('names a builder refusal', () => {
+      expect(codeOf(() => Aprs.from('M0LTE').message('N0CALL', 'x'.repeat(68)).build())).toBe('too-long');
+    });
   });
 });

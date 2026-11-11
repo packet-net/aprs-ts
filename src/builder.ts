@@ -118,7 +118,7 @@ function weatherOf(input: WeatherInput): Weather {
   const w: Mutable<Weather> = { ...rest };
   const convert = (metric: number | undefined, key: 'temperatureF' | 'rain1hIn' | 'rain24hIn' | 'rainMidnightIn', f: (v: number) => number): void => {
     if (metric === undefined) return;
-    if (w[key] !== undefined) refuse(`weather ${key} is given in two units`);
+    if (w[key] !== undefined) refuse('value-given-twice', `weather ${key} is given in two units`);
     w[key] = f(metric);
   };
   // Converted here and rounded once, when the report is written.
@@ -194,7 +194,7 @@ export class PacketBuilder {
       const b = new PositionBuilder(this.header, latitude, longitude).symbol('/_').weather(weather);
       return at === undefined ? b : b.timestamp(at);
     }
-    if (latitude !== undefined || longitude !== undefined) refuse('a weather report with a position needs both latitude and longitude');
+    if (latitude !== undefined || longitude !== undefined) refuse('missing-field', 'a weather report with a position needs both latitude and longitude');
     const when = at ?? new Date();
     return new DataBuilder(this.header, () => {
       const timestamp: AprsTimestamp = {
@@ -703,7 +703,7 @@ export class TelemetryBuilder {
 
   build(): BuiltPacket {
     const number = this.sequence;
-    if (!Number.isInteger(number) || number < 0 || number > 999) refuse(`telemetry sequence ${String(number)} is not 0-999`);
+    if (!Number.isInteger(number) || number < 0 || number > 999) refuse('value-out-of-range', `telemetry sequence ${String(number)} is not 0-999`);
     const sequence = String(number).padStart(3, '0');
     const data: Mutable<Extract<AprsData, { type: 'telemetry' }>> = {
       type: 'telemetry',

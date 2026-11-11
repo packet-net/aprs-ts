@@ -1,6 +1,7 @@
 // Shared pieces of the encoder.
 
 import { encodeUtf8Binary } from '../bytes.js';
+import type { RefusalCode } from '../codes.js';
 import type { AprsSymbol, AprsTimestamp } from '../types.js';
 
 /** The tocall used when none is given: the experimental `APZ` range. */
@@ -8,14 +9,18 @@ export const DEFAULT_DESTINATION = 'APZ001';
 
 /** Thrown when the encoder declines to write something the spec does not allow; says why. */
 export class AprsEncodeError extends Error {
-  constructor(message: string) {
+  /** The reason as a code a program can act on; the message is for people and is not stable. */
+  readonly code: RefusalCode;
+
+  constructor(message: string, code: RefusalCode = 'does-not-read-back') {
     super(message);
     this.name = 'AprsEncodeError';
+    this.code = code;
   }
 }
 
-export function refuse(reason: string): never {
-  throw new AprsEncodeError(reason);
+export function refuse(code: RefusalCode, reason: string): never {
+  throw new AprsEncodeError(reason, code);
 }
 
 export function pad(n: number, width: number): string {
@@ -39,16 +44,24 @@ export function nearest(value: number): number {
 const HALF_TOLERANCE = 1e-6;
 
 /** A whole number within [min, max], else refused; a fraction is rounded to the nearest. */
-export function whole(value: number, min: number, max: number, what: string): number {
-  if (!Number.isFinite(value)) refuse(`${what} is not a number`);
+export function whole(
+  value: number,
+  min: number,
+  max: number,
+  what: string,
+  outside: RefusalCode = 'value-out-of-range',
+  noForm?: number,
+): number {
+  if (!Number.isFinite(value)) refuse('value-out-of-range', `${what} is not a number`);
   const n = nearest(value);
-  if (n < min || n > max) refuse(`${what} ${value} is out of range (${min}-${max})`);
+  if (n === noForm) refuse('value-has-no-form', `${what} ${value} is out of range (${min}-${max})`);
+  if (n < min || n > max) refuse(outside, `${what} ${value} is out of range (${min}-${max})`);
   return n;
 }
 
 /** Free text as UTF-8 bytes (a binary string); refuses a line break, which receivers strip. */
 export function freeText(text: string, what: string): string {
-  if (/[\r\n]/.test(text)) refuse(`${what} contains a line break`);
+  if (/[\r\n]/.test(text)) refuse('invalid-character', `${what} contains a line break`);
   return encodeUtf8Binary(text);
 }
 
@@ -67,7 +80,7 @@ export function isValidTimestamp(t: AprsTimestamp): boolean {
 
 /** A 7-byte timestamp for a position or object report. */
 export function timestamp7(t: AprsTimestamp): string {
-  if (!isValidTimestamp(t)) refuse('the timestamp is out of range');
+  if (!isValidTimestamp(t)) refuse('invalid-timestamp', 'the timestamp is out of range');
   switch (t.kind) {
     case 'dhm-zulu':
       return `${pad(t.day, 2)}${pad(t.hour, 2)}${pad(t.minute, 2)}z`;
@@ -76,17 +89,17 @@ export function timestamp7(t: AprsTimestamp): string {
     case 'hms':
       return `${pad(t.hour, 2)}${pad(t.minute, 2)}${pad(t.second, 2)}h`;
     case 'mdhm':
-      return refuse('a month/day/hour/minute timestamp is only for positionless weather reports');
+      return refuse('invalid-timestamp', 'a month/day/hour/minute timestamp is only for positionless weather reports');
   }
 }
 
 export function checkSymbol(symbol: AprsSymbol): void {
-  if (symbol.code.length !== 1 || symbol.table.length !== 1) refuse('a symbol is a table and a code, one character each');
+  if (symbol.code.length !== 1 || symbol.table.length !== 1) refuse('invalid-symbol', 'a symbol is a table and a code, one character each');
   const code = symbol.code.charCodeAt(0);
-  if (code < 0x21 || code > 0x7e) refuse('the symbol code is not printable ASCII');
+  if (code < 0x21 || code > 0x7e) refuse('invalid-symbol', 'the symbol code is not printable ASCII');
   const t = symbol.table;
   const ok = t === '/' || t === '\\' || (t >= '0' && t <= '9') || (t >= 'A' && t <= 'Z');
-  if (!ok) refuse(`the symbol table ${JSON.stringify(t)} is not /, \\, 0-9 or A-Z`);
+  if (!ok) refuse('invalid-symbol', `the symbol table ${JSON.stringify(t)} is not /, \\, 0-9 or A-Z`);
 }
 
 export function base91(value: number, width: number): string {
@@ -105,7 +118,7 @@ export function base91(value: number, width: number): string {
  * `1` and 61 zeros, 1e-7 as `0.0000001`; vectors rulings, F11).
  */
 export function numberText(v: number): string {
-  if (!Number.isFinite(v)) refuse('a value is not a number');
+  if (!Number.isFinite(v)) refuse('value-out-of-range', 'a value is not a number');
   if (Object.is(v, -0)) return '0';
   const shortest = String(v);
   const m = /^(-?)([0-9])(?:\.([0-9]+))?e([+-][0-9]+)$/.exec(shortest);
