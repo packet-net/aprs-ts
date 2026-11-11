@@ -270,7 +270,10 @@ function encodeRecord(n, line) {
     throw e;
   }
   // Anything the data form holds that aprs-ts's data does not is unsupported, not silently dropped.
-  const lost = lostKeys(data, toNeutralData(own), '', []);
+  // An ack or reject with a message ID of its own, and a capabilities report with no items, are
+  // data the encoder refuses, not data aprs-ts lacks.
+  const refusable = (k) => (k === 'message_id' && (data.type === 'ack' || data.type === 'reject')) || (k === 'capabilities' && data.type === 'capabilities');
+  const lost = lostKeys(data, toNeutralData(own), '', []).filter((k) => !refusable(k));
   if (lost.length > 0) return { n, result: 'unsupported', reason: `aprs-ts data has no ${lost.join(', ')}` };
   let encoded;
   try {

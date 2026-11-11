@@ -169,7 +169,8 @@ export function encodeStatus(d: StatusReport): string {
 export function encodeTelemetryReport(d: TelemetryReport): string {
   if (d.sequence !== 'MIC' && !/^[A-Za-z0-9]+$/.test(d.sequence)) flag('malformed', 'a telemetry sequence is letters and digits, or MIC');
   if (d.sequence === 'MIC' && d.analog[0] === null) flag('value-has-no-form', 'T#MIC cannot start with an empty channel');
-  if (d.analog.length !== 5) flag('too-long', 'a telemetry report has five analog values');
+  if (d.analog.length < 5) flag('malformed', 'a telemetry report has five analog values');
+  else if (d.analog.length > 5) flag('too-long', 'a telemetry report has five analog values');
   const bits = d.bits ?? '';
   if (d.bits === undefined) flag('missing-field', 'a telemetry report has eight 0/1 bits');
   else if (!/^[01]{8}$/.test(d.bits)) flag('malformed', 'a telemetry report has eight 0/1 bits');

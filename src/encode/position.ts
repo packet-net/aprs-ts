@@ -754,8 +754,8 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   if (d.legacyTelemetry && d.legacyTelemetry.length > 0) {
     // A 255 would be taken for Kenwood 0xFF padding and removed on the way back in.
     if (d.legacyTelemetry.length !== 5) flag('malformed', 'obsolete Mic-E binary telemetry is 5 values, each 0-254');
-    if (d.legacyTelemetry.some((v) => !Number.isInteger(v) || v < 0 || v > 255)) flag('value-out-of-range', 'obsolete Mic-E binary telemetry is 5 values, each 0-254');
-    if (d.legacyTelemetry.some((v) => v === 255)) flag('value-has-no-form', 'obsolete Mic-E binary telemetry is 5 values, each 0-254');
+    else if (d.legacyTelemetry.some((v) => !Number.isInteger(v) || v < 0 || v > 255)) flag('value-out-of-range', 'obsolete Mic-E binary telemetry is 5 values, each 0-254');
+    else if (d.legacyTelemetry.some((v) => v === 255)) flag('value-has-no-form', 'obsolete Mic-E binary telemetry is 5 values, each 0-254');
     info += String.fromCharCode(0x1d, ...d.legacyTelemetry);
   }
 

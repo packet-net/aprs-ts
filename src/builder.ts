@@ -13,7 +13,7 @@
 // `build()` encodes the packet, so anything the spec does not allow is refused there, with an
 // `AprsEncodeError` that says why.
 
-import { DEFAULT_DESTINATION, nearest, numberFault, refuse } from './encode/common.js';
+import { DEFAULT_DESTINATION, markGivenTwice, nearest, numberFault, refuse } from './encode/common.js';
 import { ax25Of, checkHeaderAddresses, encodeInformation, tnc2BytesOf, tnc2TextOf, wrapKiss } from './encode/index.js';
 import { symbolOf } from './symbols.js';
 import type {
@@ -116,9 +116,10 @@ function weatherOf(input: WeatherInput): Weather {
     rainMidnightMm?: number;
   };
   const w: Mutable<Weather> = { ...rest };
+  let twice: string | undefined;
   const convert = (metric: number | undefined, key: 'temperatureF' | 'rain1hIn' | 'rain24hIn' | 'rainMidnightIn', f: (v: number) => number): void => {
     if (metric === undefined) return;
-    if (w[key] !== undefined) refuse('value-given-twice', `weather ${key} is given in two units`);
+    if (w[key] !== undefined) twice = `weather ${key} is given in two units`;
     w[key] = f(metric);
   };
   // Converted here and rounded once, when the report is written.
@@ -126,7 +127,7 @@ function weatherOf(input: WeatherInput): Weather {
   convert(rain1hMm, 'rain1hIn', (mm) => mm / MM_PER_INCH);
   convert(rain24hMm, 'rain24hIn', (mm) => mm / MM_PER_INCH);
   convert(rainMidnightMm, 'rainMidnightIn', (mm) => mm / MM_PER_INCH);
-  return w;
+  return twice === undefined ? w : markGivenTwice(w, twice);
 }
 
 function asSymbol(symbol: AprsSymbol | string): AprsSymbol {
@@ -369,9 +370,9 @@ abstract class PositionedBuilder<Self> {
 
   private altitudeTwice = false;
 
-  /** An altitude given in feet and in metres is refused, as a weather value in two units is. */
-  protected checkAltitudeUnits(): void {
-    if (this.altitudeTwice) refuse('value-given-twice', 'the altitude is given in two units');
+  /** An altitude given in feet and in metres is refused when the report is encoded, as a weather value in two units is. */
+  protected markTwice<T extends object>(data: T): T {
+    return this.altitudeTwice ? markGivenTwice(data, 'the altitude is given in two units') : data;
   }
 
   /** Free text. */
@@ -461,12 +462,11 @@ export class PositionBuilder extends ReportBuilder<PositionBuilder> {
   }
 
   build(): BuiltPacket {
-    this.checkAltitudeUnits();
     const data: Mutable<Extract<AprsData, { type: 'position' }>> = { type: 'position', ...this.fields };
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.timestampValue) data.timestamp = this.timestampValue;
     if (this.messagingValue) data.messaging = true;
-    return built(this.header, data);
+    return built(this.header, this.markTwice(data));
   }
 
   toTnc2(): string {
@@ -505,7 +505,6 @@ export class ObjectBuilder extends ReportBuilder<ObjectBuilder> {
   }
 
   build(): BuiltPacket {
-    this.checkAltitudeUnits();
     const data: Mutable<Extract<AprsData, { type: 'object' }>> = {
       type: 'object',
       name: this.name,
@@ -514,7 +513,7 @@ export class ObjectBuilder extends ReportBuilder<ObjectBuilder> {
     };
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.killedValue) data.killed = true;
-    return built(this.header, data);
+    return built(this.header, this.markTwice(data));
   }
 
   toTnc2(): string {
@@ -546,11 +545,10 @@ export class ItemBuilder extends ReportBuilder<ItemBuilder> {
   }
 
   build(): BuiltPacket {
-    this.checkAltitudeUnits();
     const data: Mutable<Extract<AprsData, { type: 'item' }>> = { type: 'item', name: this.name, ...this.fields };
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.killedValue) data.killed = true;
-    return built(this.header, data);
+    return built(this.header, this.markTwice(data));
   }
 
   toTnc2(): string {
@@ -594,7 +592,6 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
   }
 
   build(): BuiltPacket {
-    this.checkAltitudeUnits();
     const data: Mutable<Extract<AprsData, { type: 'mic-e' }>> = { type: 'mic-e', micEMessage: this.messageValue, ...this.fields };
     // A course of 0 (after rounding) is unknown, which Mic-E writes as 0: no course (B1).
     if (data.courseDegrees !== undefined && Number.isFinite(data.courseDegrees) && nearest(data.courseDegrees) === 0) delete data.courseDegrees;
@@ -604,7 +601,7 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
     if (this.typeCodeValue !== undefined) data.typeCode = this.typeCodeValue;
     if (this.locatorValue !== undefined) data.locator = this.locatorValue;
     if (this.oldValue) data.oldData = true;
-    return built(this.header, data);
+    return built(this.header, this.markTwice(data));
   }
 
   toTnc2(): string {

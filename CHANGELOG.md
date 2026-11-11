@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-1.0.1: refusals carry a reason code. `AprsEncodeError` has a new read-only `code` property, a `RefusalCode` from the shared list of 26 in the conformance vectors' `codes.json` (`refusals`), so a program can tell why the encoder or a builder refused without reading the message. `RefusalCode`, `REFUSAL_CODES` and `REFUSAL_MEANINGS` are exported. Additive only: the error class, its message text and every signature are unchanged. `code` is `does-not-read-back` only where the library's own read-back check fails and no named rule applies. New codes may be added in later 1.x releases, so allow an unknown one.
+1.0.1: refusals carry a reason code. `AprsEncodeError` has a new read-only `code` property, a `RefusalCode` from the shared list of 26 in the conformance vectors' `codes.json` (`refusals`), so a program can tell why the encoder or a builder refused without reading the message. `RefusalCode`, `REFUSAL_CODES` and `REFUSAL_MEANINGS` are exported. Additive only: the error class, its message text and every signature are unchanged. `code` is `does-not-read-back` only where the library's own read-back check fails and no named rule applies. New codes may be added in later 1.x releases, so allow an unknown one. A builder given an altitude in both feet and metres now refuses it with `value-given-twice`, as it already did for a weather value in two units; the last setter used to win.
 
 ## 1.0.0 (2026-11-10)
 

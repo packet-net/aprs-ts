@@ -58,6 +58,19 @@ export function numberFault(value: number): RefusalCode {
   return Number.isFinite(value) ? 'value-out-of-range' : 'not-a-number';
 }
 
+const givenTwice = new WeakMap<object, string>();
+
+/** Marks data a builder was given a value for in two units; the encoder refuses it with the rest of its faults. */
+export function markGivenTwice<T extends object>(data: T, reason: string): T {
+  givenTwice.set(data, reason);
+  return data;
+}
+
+/** Why data was marked as given in two units, if it was. */
+export function givenTwiceReason(data: object): string | undefined {
+  return givenTwice.get(data);
+}
+
 let faults: AprsEncodeError[] | undefined;
 
 /**

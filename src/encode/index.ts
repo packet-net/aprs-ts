@@ -10,7 +10,7 @@ import { isAprsIsAddress } from '../header.js';
 import { toNeutralData } from '../neutral.js';
 import type { RefusalCode } from '../codes.js';
 import type { AprsData, CompressionType, PathEntry } from '../types.js';
-import { AprsEncodeError, collect, DEFAULT_DESTINATION, firstRefusal, refuse } from './common.js';
+import { AprsEncodeError, collect, flag, givenTwiceReason, DEFAULT_DESTINATION, firstRefusal, refuse } from './common.js';
 import {
   encodeAck,
   encodeAgrelo,
@@ -58,7 +58,22 @@ function attempt(data: AprsData, mode: CommentMode): Attempt {
   return collect(() => attemptOnce(data, mode));
 }
 
+const INNER_HEADER_CODES: ReadonlySet<string> = new Set([
+  'invalid-header',
+  'invalid-address',
+  'empty-destination',
+  'empty-path-entry',
+  'multiple-used-markers',
+  'nul-padded-address',
+  'invalid-ax25-address-characters',
+]);
+
 function attemptOnce(data: AprsData, mode: CommentMode): Attempt {
+  const inner = (data as { weather?: unknown }).weather;
+  for (const o of [data, inner]) {
+    const why = typeof o === 'object' && o !== null ? givenTwiceReason(o) : undefined;
+    if (why !== undefined) flag('value-given-twice', why);
+  }
   switch (data.type) {
     case 'position':
       return withCompression(encodePositionReport(data, mode));
@@ -111,6 +126,9 @@ function attemptOnce(data: AprsData, mode: CommentMode): Attempt {
       const asReceived = original.length > 0 || (inner.type === 'unrecognized' && inner.reason === 'empty');
       // The inner header is checked before the inner data: the header is written first.
       checkThirdPartyHeader(data);
+      // A defect the lenient decoder tolerated in the inner header is part of the data it read.
+      if (data.packet.diagnostics.some((x) => x.severity !== 'info' && INNER_HEADER_CODES.has(x.code)))
+        flag('invalid-third-party-header', 'the inner header has a defect that was tolerated when it was read');
       const info = asReceived ? original : encodeInformation(inner).information;
       return { binary: encodeThirdParty(data, bytesToBinary(info)) };
     }

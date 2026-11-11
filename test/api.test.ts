@@ -467,6 +467,15 @@ describe('1.0 API', () => {
       expect(codeOf(() => packetToAx25(decodeTnc2('WB4APR-00>APRS:>x')))).toBe('ax25-cannot-carry');
     });
 
+    it('refuses an altitude given in two units, after the faults that come first', () => {
+      expect(codeOf(() => Aprs.from('M0LTE').position(51, -1).altitudeFeet(10).altitudeM(3).build())).toBe('value-given-twice');
+      expect(codeOf(() => Aprs.from('M0LTE').position(91, -1).altitudeFeet(10).altitudeM(3).build())).toBe('value-out-of-range');
+    });
+
+    it('calls too few telemetry values malformed', () => {
+      expect(codeOf(info({ type: 'telemetry', sequence: '001', analog: [1, 2, 3, 4], bits: '00000000' }))).toBe('malformed');
+    });
+
     it('names a builder refusal', () => {
       expect(codeOf(() => Aprs.from('M0LTE').message('N0CALL', 'x'.repeat(68)).build())).toBe('too-long');
     });
