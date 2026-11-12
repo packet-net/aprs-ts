@@ -480,4 +480,13 @@ describe('1.0 API', () => {
       expect(codeOf(() => Aprs.from('M0LTE').message('N0CALL', 'x'.repeat(68)).build())).toBe('too-long');
     });
   });
+
+  it('ignores the longitude places an ambiguous latitude blanks, digits or not', () => {
+    const packet = decodeTnc2('N0CALL>APZ001:!49  .  N/07291.75W-');
+    expect(hasErrors(packet)).toBe(false);
+    if (packet.data.type !== 'position') throw new Error('not a position');
+    expect(packet.data.ambiguity).toBe(4);
+    expect(packet.data.latitude).toBeCloseTo(49.5, 6);
+    expect(packet.data.longitude).toBeCloseTo(-72.5, 6);
+  });
 });
