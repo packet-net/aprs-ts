@@ -416,6 +416,17 @@ describe('1.0 API', () => {
     expect(() => packetToAx25(decodeTnc2('WB4APR-00>APRS:>x'))).toThrow(AprsEncodeError);
   });
 
+  it('reads a Mic-E locator at the start before any later altitude', () => {
+    const p = decodeTnc2('N0CALL>S32UVT:`(_fn"Oj/`IO91/G}!:&0\'p|');
+    if (p.data.type !== 'mic-e') throw new Error(p.data.type);
+    expect(p.data.locator).toBe('IO91');
+    expect(p.data.altitudeFeet).toBeUndefined();
+    expect(p.data.comment).toBe("}!:&0'p|");
+    expect(p.diagnostics.map((d) => `${d.severity}:${d.code}`)).toEqual(['warning:missing-space-after-locator']);
+    const re = encodeInformation(p.data);
+    expect(decodeUtf8(re.information)).toBe('`(_fn"Oj/`IO91/G }!:&0\'p|');
+  });
+
   it('defaults the options of decodeInformation', () => {
     const decoded = decodeInformation(encodeUtf8('>hello'), 'APRS');
     expect(decoded.data).toEqual({ type: 'status', text: 'hello' });
@@ -465,6 +476,14 @@ describe('1.0 API', () => {
     it('names AX.25 and TNC2 refusals', () => {
       expect(codeOf(() => encodeAx25({ source: 'TOOLONGCALL', destination: 'APRS', path: [], data: { type: 'status', text: 'x' } } as never))).toBe('ax25-cannot-carry');
       expect(codeOf(() => packetToAx25(decodeTnc2('WB4APR-00>APRS:>x')))).toBe('ax25-cannot-carry');
+    });
+
+    it('refuses an SSID of -0 in the outer header and in a third-party inner header', () => {
+      expect(codeOf(() => packetToAx25(decodeTnc2('N0ZO-0>APRS:>x')))).toBe('ax25-cannot-carry');
+      const p = decodeTnc2('N0ZO>APX220,TCPIP*,qAC,T2RDU:}N0ZO-0>APX220,WIDE-1,WIDE2-1:!3309.71N/08643.18W_035/002g002t063r000p000P000h098b10133');
+      if (p.data.type !== 'third-party') throw new Error(p.data.type);
+      const inner = p.data.packet;
+      expect(codeOf(() => packetToAx25(inner))).toBe('ax25-cannot-carry');
     });
 
     it('refuses an altitude given in two units, after the faults that come first', () => {

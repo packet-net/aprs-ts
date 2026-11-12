@@ -369,7 +369,12 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
       text = text.slice(0, at) + text.slice(at + extension.length);
       extensionAfterLocator = at > 0;
     }
-    const later = /([!-{]{3})\}/.exec(text);
+    // A locator at the start is taken before a later altitude is looked for, and the altitude
+    // search never uses its bytes (vectors rulings).
+    const locEnd = loc && !(extension && !extensionAfterLocator) ? loc[0].length : 0;
+    const laterRe = /([!-{]{3})\}/g;
+    laterRe.lastIndex = locEnd;
+    const later = laterRe.exec(text);
     if (later && ctx.allows('mic-e-altitude-not-first')) {
       altitudeFeet = (base91Value(later[1]!) - 10000) / METRES_PER_FOOT;
       text = text.slice(0, later.index) + text.slice(later.index + 4);
