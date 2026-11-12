@@ -216,3 +216,65 @@ export function isTolerable(code: DiagnosticCode): code is TolerableCode {
 
 /** Every diagnostic code. */
 export const DIAGNOSTIC_CODES: readonly DiagnosticCode[] = Object.keys(DIAGNOSTIC_MEANINGS) as DiagnosticCode[];
+
+/** Every reason the encoder or builder refuses (the vectors' codes.json `refusals`). New codes may be added in later 1.x releases, so allow an unknown one. */
+export type RefusalCode =
+  | 'invalid-address'
+  | 'ax25-cannot-carry'
+  | 'tnc2-cannot-carry'
+  | 'invalid-third-party-header'
+  | 'invalid-addressee'
+  | 'invalid-name'
+  | 'invalid-message-id'
+  | 'padding-space'
+  | 'too-long'
+  | 'malformed'
+  | 'invalid-character'
+  | 'text-reads-as-field'
+  | 'not-a-number'
+  | 'value-out-of-range'
+  | 'value-has-no-form'
+  | 'value-given-twice'
+  | 'invalid-timestamp'
+  | 'missing-field'
+  | 'invalid-symbol'
+  | 'symbol-mismatch'
+  | 'extension-conflict'
+  | 'field-not-allowed'
+  | 'invalid-code'
+  | 'invalid-nmea'
+  | 'not-encodable'
+  | 'does-not-read-back';
+
+/** What each refusal code means. */
+export const REFUSAL_MEANINGS: Readonly<Record<RefusalCode, string>> = {
+  'invalid-address': "A header address (source, destination, path entry, or a third-party one) is not 1-9 letters, digits or `-` in TNC2 text.",
+  'ax25-cannot-carry': "An AX.25 frame cannot carry the header: a call over 6 characters or in lower case, an SSID over 15 or written with a leading zero, more than 8 path entries.",
+  'tnc2-cannot-carry': "A TNC2 line cannot carry the packet: its information field is not UTF-8 text.",
+  'invalid-third-party-header': "A third-party packet's inner header cannot be written as received: a bad inner address, used markers out of order, or a tolerated defect that is part of its data.",
+  'invalid-addressee': "A message, bulletin, NWS bulletin, telemetry metadata or directed query addressee is empty, over 9 characters, holds a space or `:`, or is not the form its report needs (`NWS-`/`NWS_`, a group bulletin's digit).",
+  'invalid-name': "An object or item name is the wrong length or holds a character a name cannot.",
+  'invalid-message-id': "A message ID is empty, over 5 characters or not letters and digits, or an ack or reject carries the wrong kind of ID.",
+  'padding-space': "Text starts or ends with a space that would be read back as padding (an object name, a capability value).",
+  'too-long': "Free text or a list is longer than its field allows: message text over 67 characters, a project title over 23, more than 13 names, more than 5 analog values.",
+  'malformed': "Text in a fixed-form field is not that form: a locator, a bit sense, telemetry bits, signpost text, a capability token, a weather extra field, too few telemetry values.",
+  'invalid-character': "Free text holds a character its field cannot carry: a line break (or a field that would end in CR or LF), a `{` in message-like text, or a character outside printable ASCII where only that is allowed.",
+  'text-reads-as-field': "Free text would read back as a structured element (an altitude, a `!DAO!`, telemetry, a frequency, PHG/RNG/DFS, a timestamp or locator, a Mic-E device suffix, a weather field), and no clean form avoids it.",
+  'not-a-number': "A value is NaN or infinite.",
+  'value-out-of-range': "A number is outside what its field holds, after rounding (latitude, speed, gust, snowfall, range, footprint, bearing, telemetry sequence, PHG and DFS digits, an SSID).",
+  'value-has-no-form': "A value inside the range that no form reads back as: a course of 0 in Mic-E or compressed bytes, a humidity of 0, Mic-E telemetry 255, `T#MIC` with an empty first channel, a frequency between bands.",
+  'value-given-twice': "A builder input was given in two units (Celsius and Fahrenheit, feet and metres, mm and inches).",
+  'invalid-timestamp': "A timestamp has a field out of range, or is a format the report does not take (a status not DHM, MDHM outside a positionless weather report).",
+  'missing-field': "The data lacks something its report or another field needs: an object's timestamp, a capability, a compressed course without its speed, wind direction without speed, a tone without a frequency, a GGA type without an altitude.",
+  'invalid-symbol': "The symbol table or code is not a valid symbol.",
+  'symbol-mismatch': "The symbol disagrees with the data: weather without `_`, `_` without weather, an area without `\\l`, a DF bearing without `/\\`, a signpost without `\\m`.",
+  'extension-conflict': "Two things want the one data extension or the cs bytes: course/speed with PHG, a DF bearing with RNG, a compressed course with a range, wind with a range, a weather report's wind with a course.",
+  'field-not-allowed': "The report has no place for a field, or it contradicts another: a compressed report with PHG, area or ambiguity, Mic-E with weather or an area, weather with a comment, telemetry or frequency, a locator status with a timestamp, a `!DAO!` on an ambiguous position.",
+  'invalid-code': "An enumerated value outside its set: a Mic-E message with mixed bits or custom over 6, a Mic-E type code, a beam heading or power code, a query type, a DAO datum, a compression type, a tone type.",
+  'invalid-nmea': "An NMEA sentence is malformed, its checksum does not match, or a field given beside it disagrees with it.",
+  'not-encodable': "The call has nothing it can write: undecoded data, or Mic-E through a call that cannot return the destination.",
+  'does-not-read-back': "Fallback: the library's own read-back check found the bytes decode to different data and no rule above names why.",
+};
+
+/** Every refusal code. */
+export const REFUSAL_CODES: readonly RefusalCode[] = Object.keys(REFUSAL_MEANINGS) as RefusalCode[];

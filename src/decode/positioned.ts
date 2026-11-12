@@ -188,7 +188,9 @@ export function parseUncompressed(ctx: DecodeContext, s: string, i: number): Raw
   }
   const lonDegrees = Number(lon.substr(0, 3));
   const lonMinutes = ambiguousMinutes(lon[3]!, lon[4]!, lon[6]!, lon[7]!, latAmbiguity);
-  const rawLonMinutes = ambiguousMinutes(lon[3]!, lon[4]!, lon[6]!, lon[7]!, 0);
+  // The places the ambiguity blanks are ignored, so only the others are range-checked.
+  const kept = lonPlaces.map((c, k) => (k >= 4 - latAmbiguity ? '0' : c));
+  const rawLonMinutes = ambiguousMinutes(kept[0]!, kept[1]!, kept[2]!, kept[3]!, 0);
   // As for the latitude, the centre of an ambiguous 180 degrees is past 180.
   if (rawLonMinutes >= 60 || lonDegrees > 180 || (lonDegrees === 180 && (rawLonMinutes > 0 || lonMinutes > 0))) ctx.fail('invalid-longitude');
   let ew = lon[8]!;

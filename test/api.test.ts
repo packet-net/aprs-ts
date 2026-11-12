@@ -4,6 +4,9 @@ import { describe, expect, it } from 'vitest';
 import {
   acceptsOverlay,
   AprsEncodeError,
+  REFUSAL_CODES,
+  REFUSAL_MEANINGS,
+  type RefusalCode,
   AprsHeaderError,
   Aprs,
   decodeAx25,
@@ -413,8 +416,96 @@ describe('1.0 API', () => {
     expect(() => packetToAx25(decodeTnc2('WB4APR-00>APRS:>x'))).toThrow(AprsEncodeError);
   });
 
+  it('reads a Mic-E locator at the start before any later altitude', () => {
+    const p = decodeTnc2('N0CALL>S32UVT:`(_fn"Oj/`IO91/G}!:&0\'p|');
+    if (p.data.type !== 'mic-e') throw new Error(p.data.type);
+    expect(p.data.locator).toBe('IO91');
+    expect(p.data.altitudeFeet).toBeUndefined();
+    expect(p.data.comment).toBe("}!:&0'p|");
+    expect(p.diagnostics.map((d) => `${d.severity}:${d.code}`)).toEqual(['warning:missing-space-after-locator']);
+    const re = encodeInformation(p.data);
+    expect(decodeUtf8(re.information)).toBe('`(_fn"Oj/`IO91/G }!:&0\'p|');
+  });
+
   it('defaults the options of decodeInformation', () => {
     const decoded = decodeInformation(encodeUtf8('>hello'), 'APRS');
     expect(decoded.data).toEqual({ type: 'status', text: 'hello' });
+  });
+
+  describe('refusal codes', () => {
+    const codeOf = (fn: () => unknown): RefusalCode => {
+      try {
+        fn();
+      } catch (e) {
+        if (e instanceof AprsEncodeError) return e.code;
+        throw e;
+      }
+      throw new Error('not refused');
+    };
+    const info = (data: Parameters<typeof encodeInformation>[0]): (() => unknown) => () => encodeInformation(data);
+    const sym = { table: '/', code: '>' };
+
+    it('lists 26 codes with a meaning each', () => {
+      expect(REFUSAL_CODES).toHaveLength(26);
+      for (const c of REFUSAL_CODES) expect(REFUSAL_MEANINGS[c].length).toBeGreaterThan(0);
+    });
+
+    it('names the reason for a representative refusal from each group', () => {
+      const pos = { type: 'position', latitude: 51, longitude: -1, symbol: sym } as const;
+      expect(codeOf(info({ ...pos, latitude: 91 }))).toBe('value-out-of-range');
+      expect(codeOf(info({ ...pos, symbol: { table: '!', code: '>' } }))).toBe('invalid-symbol');
+      expect(codeOf(info({ ...pos, comment: 'a\nb' }))).toBe('invalid-character');
+      expect(codeOf(info({ type: 'message', addressee: '', text: 'x' }))).toBe('invalid-addressee');
+      expect(codeOf(info({ type: 'message', addressee: 'N0CALL', text: 'x', messageId: '123456' }))).toBe('invalid-message-id');
+      expect(codeOf(info({ type: 'message', addressee: 'N0CALL', text: 'x'.repeat(68) }))).toBe('too-long');
+      expect(codeOf(info({ type: 'status', text: 'x', locator: 'ZZ99', symbol: sym }))).toBe('malformed');
+      expect(codeOf(info({ type: 'object', name: 'OBJ', symbol: sym, latitude: 51, longitude: -1 } as never))).toBe('missing-field');
+      expect(codeOf(info({ type: 'object', name: 'OBJ ', timestamp: { kind: 'dhm-zulu', day: 1, hour: 1, minute: 1 }, symbol: sym, latitude: 51, longitude: -1 } as never))).toBe('padding-space');
+      expect(codeOf(info({ type: 'unrecognized', reason: 'x', raw: 'x' } as never))).toBe('not-encodable');
+    });
+
+    it('reports the first-ranked of several faults', () => {
+      // A bad addressee comes before a text that is too long, and a missing ID before neither.
+      expect(codeOf(info({ type: 'message', addressee: 'A:B', text: 'x'.repeat(68) }))).toBe('invalid-addressee');
+      expect(codeOf(info({ type: 'message', addressee: 'NWS-WARN', text: 'x' }))).toBe('invalid-addressee');
+      expect(codeOf(info({ type: 'message', addressee: 'N0CALL', text: 'x', replyAck: '1' }))).toBe('missing-field');
+      expect(codeOf(info({ type: 'telemetry', sequence: 'MIC', analog: [null, 1, 2, 3, 4], bits: '01010101' }))).toBe('value-has-no-form');
+      expect(codeOf(info({ type: 'capabilities', capabilities: [['A B']] } as never))).toBe('malformed');
+    });
+
+    it('names AX.25 and TNC2 refusals', () => {
+      expect(codeOf(() => encodeAx25({ source: 'TOOLONGCALL', destination: 'APRS', path: [], data: { type: 'status', text: 'x' } } as never))).toBe('ax25-cannot-carry');
+      expect(codeOf(() => packetToAx25(decodeTnc2('WB4APR-00>APRS:>x')))).toBe('ax25-cannot-carry');
+    });
+
+    it('refuses an SSID of -0 in the outer header and in a third-party inner header', () => {
+      expect(codeOf(() => packetToAx25(decodeTnc2('N0ZO-0>APRS:>x')))).toBe('ax25-cannot-carry');
+      const p = decodeTnc2('N0ZO>APX220,TCPIP*,qAC,T2RDU:}N0ZO-0>APX220,WIDE-1,WIDE2-1:!3309.71N/08643.18W_035/002g002t063r000p000P000h098b10133');
+      if (p.data.type !== 'third-party') throw new Error(p.data.type);
+      const inner = p.data.packet;
+      expect(codeOf(() => packetToAx25(inner))).toBe('ax25-cannot-carry');
+    });
+
+    it('refuses an altitude given in two units, after the faults that come first', () => {
+      expect(codeOf(() => Aprs.from('M0LTE').position(51, -1).altitudeFeet(10).altitudeM(3).build())).toBe('value-given-twice');
+      expect(codeOf(() => Aprs.from('M0LTE').position(91, -1).altitudeFeet(10).altitudeM(3).build())).toBe('value-out-of-range');
+    });
+
+    it('calls too few telemetry values malformed', () => {
+      expect(codeOf(info({ type: 'telemetry', sequence: '001', analog: [1, 2, 3, 4], bits: '00000000' }))).toBe('malformed');
+    });
+
+    it('names a builder refusal', () => {
+      expect(codeOf(() => Aprs.from('M0LTE').message('N0CALL', 'x'.repeat(68)).build())).toBe('too-long');
+    });
+  });
+
+  it('ignores the longitude places an ambiguous latitude blanks, digits or not', () => {
+    const packet = decodeTnc2('N0CALL>APZ001:!49  .  N/07291.75W-');
+    expect(hasErrors(packet)).toBe(false);
+    if (packet.data.type !== 'position') throw new Error('not a position');
+    expect(packet.data.ambiguity).toBe(4);
+    expect(packet.data.latitude).toBeCloseTo(49.5, 6);
+    expect(packet.data.longitude).toBeCloseTo(-72.5, 6);
   });
 });

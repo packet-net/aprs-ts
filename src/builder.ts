@@ -13,7 +13,7 @@
 // `build()` encodes the packet, so anything the spec does not allow is refused there, with an
 // `AprsEncodeError` that says why.
 
-import { DEFAULT_DESTINATION, nearest, refuse } from './encode/common.js';
+import { DEFAULT_DESTINATION, markGivenTwice, nearest, numberFault, refuse } from './encode/common.js';
 import { ax25Of, checkHeaderAddresses, encodeInformation, tnc2BytesOf, tnc2TextOf, wrapKiss } from './encode/index.js';
 import { symbolOf } from './symbols.js';
 import type {
@@ -116,9 +116,10 @@ function weatherOf(input: WeatherInput): Weather {
     rainMidnightMm?: number;
   };
   const w: Mutable<Weather> = { ...rest };
+  let twice: string | undefined;
   const convert = (metric: number | undefined, key: 'temperatureF' | 'rain1hIn' | 'rain24hIn' | 'rainMidnightIn', f: (v: number) => number): void => {
     if (metric === undefined) return;
-    if (w[key] !== undefined) refuse(`weather ${key} is given in two units`);
+    if (w[key] !== undefined) twice = `weather ${key} is given in two units`;
     w[key] = f(metric);
   };
   // Converted here and rounded once, when the report is written.
@@ -126,7 +127,7 @@ function weatherOf(input: WeatherInput): Weather {
   convert(rain1hMm, 'rain1hIn', (mm) => mm / MM_PER_INCH);
   convert(rain24hMm, 'rain24hIn', (mm) => mm / MM_PER_INCH);
   convert(rainMidnightMm, 'rainMidnightIn', (mm) => mm / MM_PER_INCH);
-  return w;
+  return twice === undefined ? w : markGivenTwice(w, twice);
 }
 
 function asSymbol(symbol: AprsSymbol | string): AprsSymbol {
@@ -194,7 +195,7 @@ export class PacketBuilder {
       const b = new PositionBuilder(this.header, latitude, longitude).symbol('/_').weather(weather);
       return at === undefined ? b : b.timestamp(at);
     }
-    if (latitude !== undefined || longitude !== undefined) refuse('a weather report with a position needs both latitude and longitude');
+    if (latitude !== undefined || longitude !== undefined) refuse('missing-field', 'a weather report with a position needs both latitude and longitude');
     const when = at ?? new Date();
     return new DataBuilder(this.header, () => {
       const timestamp: AprsTimestamp = {
@@ -348,6 +349,7 @@ abstract class PositionedBuilder<Self> {
   /** Altitude, feet, sent as a `/A=` in whole feet (rounded to the nearest, halves away from zero). */
   altitudeFeet(feet: number): Self {
     this.fields.altitudeFeet = feet;
+    if (this.altitudeUnit === 'metres') this.altitudeTwice = true;
     this.altitudeUnit = 'feet';
     return this.self();
   }
@@ -358,12 +360,20 @@ abstract class PositionedBuilder<Self> {
    */
   altitudeM(metres: number): Self {
     this.fields.altitudeFeet = metres / 0.3048;
+    if (this.altitudeUnit === 'feet') this.altitudeTwice = true;
     this.altitudeUnit = 'metres';
     return this.self();
   }
 
   /** The unit the altitude was given in. */
   protected altitudeUnit: 'feet' | 'metres' | undefined;
+
+  private altitudeTwice = false;
+
+  /** An altitude given in feet and in metres is refused when the report is encoded, as a weather value in two units is. */
+  protected markTwice<T extends object>(data: T): T {
+    return this.altitudeTwice ? markGivenTwice(data, 'the altitude is given in two units') : data;
+  }
 
   /** Free text. */
   comment(text: string): Self {
@@ -456,7 +466,7 @@ export class PositionBuilder extends ReportBuilder<PositionBuilder> {
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.timestampValue) data.timestamp = this.timestampValue;
     if (this.messagingValue) data.messaging = true;
-    return built(this.header, data);
+    return built(this.header, this.markTwice(data));
   }
 
   toTnc2(): string {
@@ -503,7 +513,7 @@ export class ObjectBuilder extends ReportBuilder<ObjectBuilder> {
     };
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.killedValue) data.killed = true;
-    return built(this.header, data);
+    return built(this.header, this.markTwice(data));
   }
 
   toTnc2(): string {
@@ -538,7 +548,7 @@ export class ItemBuilder extends ReportBuilder<ItemBuilder> {
     const data: Mutable<Extract<AprsData, { type: 'item' }>> = { type: 'item', name: this.name, ...this.fields };
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.killedValue) data.killed = true;
-    return built(this.header, data);
+    return built(this.header, this.markTwice(data));
   }
 
   toTnc2(): string {
@@ -591,7 +601,7 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
     if (this.typeCodeValue !== undefined) data.typeCode = this.typeCodeValue;
     if (this.locatorValue !== undefined) data.locator = this.locatorValue;
     if (this.oldValue) data.oldData = true;
-    return built(this.header, data);
+    return built(this.header, this.markTwice(data));
   }
 
   toTnc2(): string {
@@ -703,7 +713,7 @@ export class TelemetryBuilder {
 
   build(): BuiltPacket {
     const number = this.sequence;
-    if (!Number.isInteger(number) || number < 0 || number > 999) refuse(`telemetry sequence ${String(number)} is not 0-999`);
+    if (!Number.isInteger(number) || number < 0 || number > 999) refuse(numberFault(number), `telemetry sequence ${String(number)} is not 0-999`);
     const sequence = String(number).padStart(3, '0');
     const data: Mutable<Extract<AprsData, { type: 'telemetry' }>> = {
       type: 'telemetry',

@@ -8,8 +8,9 @@ import { decodeInformation } from '../decode/index.js';
 import { formatDiagnostic, ParseOptions } from '../diagnostics.js';
 import { isAprsIsAddress } from '../header.js';
 import { toNeutralData } from '../neutral.js';
+import type { RefusalCode } from '../codes.js';
 import type { AprsData, CompressionType, PathEntry } from '../types.js';
-import { AprsEncodeError, DEFAULT_DESTINATION, refuse } from './common.js';
+import { AprsEncodeError, collect, flag, givenTwiceReason, DEFAULT_DESTINATION, firstRefusal, refuse } from './common.js';
 import {
   encodeAck,
   encodeAgrelo,
@@ -27,6 +28,7 @@ import {
   encodeTelemetryNames,
   encodeTelemetryReport,
   encodeTest,
+  checkThirdPartyHeader,
   encodeThirdParty,
   encodeUserDefined,
 } from './other.js';
@@ -53,6 +55,25 @@ function withCompression(b: { text: string; compression?: CompressionType }): At
 }
 
 function attempt(data: AprsData, mode: CommentMode): Attempt {
+  return collect(() => attemptOnce(data, mode));
+}
+
+const INNER_HEADER_CODES: ReadonlySet<string> = new Set([
+  'invalid-header',
+  'invalid-address',
+  'empty-destination',
+  'empty-path-entry',
+  'multiple-used-markers',
+  'nul-padded-address',
+  'invalid-ax25-address-characters',
+]);
+
+function attemptOnce(data: AprsData, mode: CommentMode): Attempt {
+  const inner = (data as { weather?: unknown }).weather;
+  for (const o of [data, inner]) {
+    const why = typeof o === 'object' && o !== null ? givenTwiceReason(o) : undefined;
+    if (why !== undefined) flag('value-given-twice', why);
+  }
   switch (data.type) {
     case 'position':
       return withCompression(encodePositionReport(data, mode));
@@ -103,6 +124,11 @@ function attempt(data: AprsData, mode: CommentMode): Attempt {
       const original = data.packet.information;
       const inner = data.packet.data;
       const asReceived = original.length > 0 || (inner.type === 'unrecognized' && inner.reason === 'empty');
+      // The inner header is checked before the inner data: the header is written first.
+      checkThirdPartyHeader(data);
+      // A defect the lenient decoder tolerated in the inner header is part of the data it read.
+      if (data.packet.diagnostics.some((x) => x.severity !== 'info' && INNER_HEADER_CODES.has(x.code)))
+        flag('invalid-third-party-header', 'the inner header has a defect that was tolerated when it was read');
       const info = asReceived ? original : encodeInformation(inner).information;
       return { binary: encodeThirdParty(data, bytesToBinary(info)) };
     }
@@ -113,7 +139,7 @@ function attempt(data: AprsData, mode: CommentMode): Attempt {
     case 'agrelo-df':
       return { binary: encodeAgrelo(data) };
     case 'unrecognized':
-      return refuse('unrecognized data has nothing to encode');
+      return refuse('not-encodable', 'unrecognized data has nothing to encode');
   }
 }
 
@@ -123,18 +149,31 @@ function sameNumber(a: number, b: number): boolean {
   return Math.abs(a - b) <= 1e-9 * (scale >= 1 ? scale : 1);
 }
 
+/** A way the written data would read back differently, with the refusal code it earns. */
+interface Problem {
+  readonly code: RefusalCode;
+  readonly text: string;
+}
+
+/** Fields that hold free text; one that reads back changed or lost is text that read as something else. */
+const FREE_TEXT_FIELDS: ReadonlySet<string> = new Set(['comment', 'text', 'data', 'project', 'software', 'unit', 'names', 'units', 'extra', 'status']);
+
+function problem(code: RefusalCode, text: string): Problem {
+  return { code, text };
+}
+
 /**
  * Where the written data would read back differently: strings, booleans and which fields are
  * present, and with `numbers` the numbers too. Numbers are left out otherwise, because a value
  * given with more precision than the format carries is written to the format's precision.
  */
-function shapeDifferences(a: unknown, b: unknown, path: string, out: string[], numbers: boolean): void {
+function shapeDifferences(a: unknown, b: unknown, path: string, out: Problem[], numbers: boolean): void {
   if (typeof a === 'number' && typeof b === 'number') {
-    if (numbers && !sameNumber(a, b)) out.push(`${path.replace(/\.$/, '')} would read back as ${a}`);
+    if (numbers && !sameNumber(a, b)) out.push(problem('invalid-nmea', `${path.replace(/\.$/, '')} would read back as ${a}`));
     return;
   }
   if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) out.push(`${path.replace(/\.$/, '')} would have ${a.length} items, not ${b.length}`);
+    if (a.length !== b.length) out.push(problem('text-reads-as-field', `${path.replace(/\.$/, '')} would have ${a.length} items, not ${b.length}`));
     else a.forEach((x, i) => shapeDifferences(x, b[i], `${path}${i}.`, out, numbers));
     return;
   }
@@ -142,13 +181,13 @@ function shapeDifferences(a: unknown, b: unknown, path: string, out: string[], n
     const ao = a as Record<string, unknown>;
     const bo = b as Record<string, unknown>;
     for (const k of new Set([...Object.keys(ao), ...Object.keys(bo)])) {
-      if (!(k in ao)) out.push(`${path}${k} would be lost`);
-      else if (!(k in bo)) out.push(`${path}${k} would appear`);
+      if (!(k in ao)) out.push(problem(FREE_TEXT_FIELDS.has(k) ? 'text-reads-as-field' : 'does-not-read-back', `${path}${k} would be lost`));
+      else if (!(k in bo)) out.push(problem('text-reads-as-field', `${path}${k} would appear`));
       else shapeDifferences(ao[k], bo[k], `${path}${k}.`, out, numbers);
     }
     return;
   }
-  if (a !== b) out.push(`${path.replace(/\.$/, '')} would read back as ${JSON.stringify(a)}`);
+  if (a !== b) out.push(problem('text-reads-as-field', `${path.replace(/\.$/, '')} would read back as ${JSON.stringify(a)}`));
 }
 
 /** The data as it should read back: what the encoder fills in that the input may leave out. */
@@ -174,17 +213,20 @@ function expected(data: AprsData, a: Attempt): AprsData {
   return d;
 }
 
-function check(data: AprsData, a: Attempt): string[] {
+function check(data: AprsData, a: Attempt): Problem[] {
   const decoded = decodeInformation(binaryToBytes(a.binary), a.destination ?? DEFAULT_DESTINATION, ParseOptions.lenient);
-  const problems: string[] = [];
+  const problems: Problem[] = [];
   const bad = decoded.diagnostics.filter((d) => d.severity !== 'info');
-  if (bad.length > 0) problems.push(`it would read back with ${bad.map(formatDiagnostic).join(', ')}`);
+  if (bad.length > 0) problems.push(problem('text-reads-as-field', `it would read back with ${bad.map(formatDiagnostic).join(', ')}`));
   if (decoded.data.type !== data.type) {
-    problems.push(`it would read back as ${decoded.data.type}`);
+    problems.push(problem('text-reads-as-field', `it would read back as ${decoded.data.type}`));
     return problems;
   }
   // An NMEA sentence is written as it is, so everything read from it must be what the data says.
-  shapeDifferences(withoutInnerInfo(toNeutralData(decoded.data)), withoutInnerInfo(toNeutralData(expected(data, a))), '', problems, data.type === 'nmea');
+  const shape: Problem[] = [];
+  shapeDifferences(withoutInnerInfo(toNeutralData(decoded.data)), withoutInnerInfo(toNeutralData(expected(data, a))), '', shape, data.type === 'nmea');
+  // Whatever differs in a sentence read back is a field that disagrees with it.
+  for (const p of shape) problems.push(data.type === 'nmea' ? problem('invalid-nmea', p.text) : p);
   return problems;
 }
 
@@ -227,7 +269,7 @@ export function encodeInformation(data: AprsData): EncodedInformation {
       }
     }
   }
-  if (problems.length > 0) refuse(`it would not read back the same: ${problems.join('; ')}`);
+  if (problems.length > 0) refuse(firstRefusal(problems).code, `it would not read back the same: ${problems.map((p) => p.text).join('; ')}`);
   const information = binaryToBytes(chosen.binary);
   return chosen.destination !== undefined ? { information, destination: chosen.destination } : { information };
 }
@@ -254,9 +296,9 @@ function resolve(p: PacketToEncode): { destination: string; information: Uint8Ar
 
 /** Refuses a source, destination or path entry that APRS-IS does not allow as an address. */
 export function checkHeaderAddresses(source: string, destination: string, path: readonly string[]): void {
-  if (!isAprsIsAddress(source)) refuse(`the source ${JSON.stringify(source)} is not a valid address`);
-  if (!isAprsIsAddress(destination)) refuse(`the destination ${JSON.stringify(destination)} is not a valid address`);
-  for (const e of path) if (!isAprsIsAddress(e.replace(/\*$/, ''))) refuse(`the path entry ${JSON.stringify(e)} is not a valid address`);
+  if (!isAprsIsAddress(source)) refuse('invalid-address', `the source ${JSON.stringify(source)} is not a valid address`);
+  if (!isAprsIsAddress(destination)) refuse('invalid-address', `the destination ${JSON.stringify(destination)} is not a valid address`);
+  for (const e of path) if (!isAprsIsAddress(e.replace(/\*$/, ''))) refuse('invalid-address', `the path entry ${JSON.stringify(e)} is not a valid address`);
 }
 
 /** A TNC2 line from a header and an information field already encoded; the addresses are not checked. */
@@ -271,7 +313,7 @@ export function tnc2BytesOf(source: string, destination: string, path: readonly 
 /** A TNC2 line as text; refuses an information field that is not UTF-8. */
 export function tnc2TextOf(bytes: Uint8Array): string {
   const text = decodeUtf8(bytes);
-  if (text === undefined) refuse('the information field is not UTF-8 text; use encodeTnc2Bytes');
+  if (text === undefined) refuse('tnc2-cannot-carry', 'the information field is not UTF-8 text; use encodeTnc2Bytes');
   return text;
 }
 
@@ -292,10 +334,10 @@ export function encodeTnc2(p: PacketToEncode): string {
 
 function ax25Address(text: string, last: boolean, flag: boolean): number[] {
   const m = /^([A-Z0-9]{1,6})(?:-([0-9]{1,2}))?$/.exec(text);
-  if (!m) refuse(`${JSON.stringify(text)} is not an AX.25 address`);
-  if (m[2] !== undefined && m[2].length > 1 && m[2].startsWith('0')) refuse(`${JSON.stringify(text)} has a leading zero in its SSID, which a frame would give back without the zero`);
+  if (!m) refuse('ax25-cannot-carry', `${JSON.stringify(text)} is not an AX.25 address`);
+  if (m[2] !== undefined && m[2].startsWith('0')) refuse('ax25-cannot-carry', `${JSON.stringify(text)} has a leading zero or a zero in its SSID, which a frame would give back without it`);
   const ssid = m[2] === undefined ? 0 : Number(m[2]);
-  if (ssid > 15) refuse(`${JSON.stringify(text)} has an SSID over 15`);
+  if (ssid > 15) refuse('ax25-cannot-carry', `${JSON.stringify(text)} has an SSID over 15`);
   const call = m[1]!.padEnd(6, ' ');
   const out = Array.from(call, (c) => c.charCodeAt(0) << 1);
   out.push(0x60 | (ssid << 1) | (flag ? 0x80 : 0) | (last ? 1 : 0));
@@ -304,7 +346,7 @@ function ax25Address(text: string, last: boolean, flag: boolean): number[] {
 
 /** An AX.25 UI frame from a header and an information field already encoded. */
 export function ax25Of(source: string, destination: string, path: readonly (string | PathEntry)[], information: Uint8Array): Uint8Array {
-  if (path.length > 8) refuse('AX.25 allows at most 8 digipeaters');
+  if (path.length > 8) refuse('ax25-cannot-carry', 'AX.25 allows at most 8 digipeaters');
   const bytes: number[] = [];
   bytes.push(...ax25Address(destination, false, true));
   bytes.push(...ax25Address(source, path.length === 0, false));

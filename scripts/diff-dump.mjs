@@ -8,16 +8,17 @@
 //
 // decode: one hex-encoded TNC2 line per input line; writes
 //   {"n", "lenient": R, "strict": R, "reencode": "identical|equivalent|refused|fails|none",
-//    "written": "hex", "written_destination": "...", "api": A}
+//    "written": "hex", "written_destination": "...", "reencode_refusal": "id", "api": A}
 // where R is {"header", "data", "diagnostics"} in the neutral form, or {"header_error": [...]};
 // written is the information field the encoder wrote (whenever it wrote one), written_destination
-// the Mic-E destination it computed, and api the API view of the lenient packet.
+// the Mic-E destination it computed, reencode_refusal the refusal code when reencode is refused,
+// and api the API view of the lenient packet (with ax25_refusal beside ax25 "refused").
 //
 // encode: {"n", "data", "exact"} per line, data in the neutral form; writes
-//   {"n", "result": "written|refused|unsupported", "info", "destination", "again", "reason"}
+//   {"n", "result": "written|refused|unsupported", "info", "destination", "again", "reason", "refusal"}
 //
 // build: a builder recipe per line; writes
-//   {"n", "result": "built|refused|unsupported", "tnc2", "again", "reason"}
+//   {"n", "result": "built|refused|unsupported", "tnc2", "again", "reason", "refusal"}
 
 import { createReadStream, createWriteStream } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -99,6 +100,11 @@ function decodedAgain(line, withHeader) {
 }
 
 /** An encoder refusal, or a builder declining a value (a symbol it cannot make, say). */
+function refusalCode(e) {
+  // A RangeError is the builder's symbol constructor declining a symbol.
+  return e instanceof AprsEncodeError ? e.code : 'invalid-symbol';
+}
+
 function isRefusal(e) {
   return e instanceof AprsEncodeError || e instanceof RangeError;
 }
@@ -141,7 +147,7 @@ function reencode(lenient) {
   try {
     encoded = encodeInformation(packet.data);
   } catch (e) {
-    if (e instanceof AprsEncodeError) return { how: 'refused' };
+    if (e instanceof AprsEncodeError) return { how: 'refused', refusal: e.code };
     throw e;
   }
   const written = { written: bytesToHex(encoded.information) };
@@ -208,6 +214,7 @@ function apiView(packet) {
   } catch (e) {
     if (!(e instanceof AprsEncodeError)) throw e;
     api.ax25 = 'refused';
+    api.ax25_refusal = e.code;
   }
   if (packet.device) {
     const device = {};
@@ -230,8 +237,9 @@ function decodeRecord(n, line) {
   const bytes = hexToBytes(line.trim());
   const lenient = result(bytes, ParseOptions.lenient);
   const strict = result(bytes, ParseOptions.strict);
-  const { how, written } = reencode(lenient);
+  const { how, written, refusal } = reencode(lenient);
   const record = { n, lenient: lenient.json, strict: strict.json, reencode: how, ...written };
+  if (refusal !== undefined) record.reencode_refusal = refusal;
   if (lenient.packet) record.api = apiView(lenient.packet);
   return record;
 }
@@ -262,13 +270,16 @@ function encodeRecord(n, line) {
     throw e;
   }
   // Anything the data form holds that aprs-ts's data does not is unsupported, not silently dropped.
-  const lost = lostKeys(data, toNeutralData(own), '', []);
+  // An ack or reject with a message ID of its own, and a capabilities report with no items, are
+  // data the encoder refuses, not data aprs-ts lacks.
+  const refusable = (k) => (k === 'message_id' && (data.type === 'ack' || data.type === 'reject')) || (k === 'capabilities' && data.type === 'capabilities');
+  const lost = lostKeys(data, toNeutralData(own), '', []).filter((k) => !refusable(k));
   if (lost.length > 0) return { n, result: 'unsupported', reason: `aprs-ts data has no ${lost.join(', ')}` };
   let encoded;
   try {
     encoded = encodeInformation(own);
   } catch (e) {
-    if (e instanceof AprsEncodeError) return { n, result: 'refused', reason: e.message };
+    if (e instanceof AprsEncodeError) return { n, result: 'refused', reason: e.message, refusal: e.code };
     throw e;
   }
   const destination = encoded.destination ?? 'APZ001';
@@ -354,7 +365,6 @@ function positioned(b, args, report) {
   if (args.speed_knots !== undefined && args.speed_kmh !== undefined) unsupported('speed_kmh', 'given with speed_knots');
   if (args.speed_knots !== undefined) b.speedKnots(args.speed_knots);
   if (args.speed_kmh !== undefined) b.speedKmh(args.speed_kmh);
-  if (args.altitude_feet !== undefined && args.altitude_m !== undefined) unsupported('altitude_m', 'given with altitude_feet');
   if (args.altitude_feet !== undefined) b.altitudeFeet(args.altitude_feet);
   if (args.altitude_m !== undefined) b.altitudeM(args.altitude_m);
   if (args.comment !== undefined) b.comment(args.comment);
@@ -512,7 +522,7 @@ function buildRecord(n, line) {
     packet = builderFor(recipe).build();
   } catch (e) {
     if (e instanceof Unsupported) return { n, result: 'unsupported', reason: e.message };
-    if (isRefusal(e)) return { n, result: 'refused', reason: e.message };
+    if (isRefusal(e)) return { n, result: 'refused', reason: e.message, refusal: refusalCode(e) };
     throw e;
   }
   const tnc2 = packet.toTnc2Bytes();

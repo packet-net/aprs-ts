@@ -157,6 +157,24 @@ try {
 
 The encoder also works on data directly: `encodeInformation(data)` returns the `information` field bytes (and for Mic-E the `destination`), and `encodeTnc2` / `encodeAx25` a whole packet. Decoding and encoding again round-trips: data from the decoder encodes back to the same bytes, or to bytes that decode to the same data, or is refused when there are none. It is never written as bytes that read back as different data, apart from wind or a range going back into a compressed position's cs bytes, which carry them in steps.
 
+### Why a refusal
+
+An `AprsEncodeError` carries a `code`, one of a short list of reasons (`RefusalCode`; `REFUSAL_MEANINGS[code]` says what each means), so a program can act on the reason without reading the message, which is for people and is not stable. The list is shared with the other implementations.
+
+```ts
+import { Aprs, AprsEncodeError } from '@packet-net/pdn-aprs';
+
+let code;
+try {
+  Aprs.from('M0LTE').message('N0CALL', 'x'.repeat(68)).build();
+} catch (e) {
+  if (e instanceof AprsEncodeError) code = e.code;
+}
+console.log(code); // too-long
+```
+
+New codes may be added in later 1.x releases, so handle one you do not know. `does-not-read-back` is the fallback for a failed read-back check that no named rule explains.
+
 ## Writing out a received packet
 
 A decoded packet keeps the information field as received, so a digipeater or IGate can pass it on without re-encoding it. `packetToTnc2(packet)` and `packetToTnc2Bytes(packet)` give the TNC2 line, and `packetToAx25(packet)` the AX.25 UI frame (it throws `AprsEncodeError` for an address AX.25 cannot carry as sent, such as an SSID written `-00`). `hasErrors` and `hasWarnings` summarise the diagnostics, and `phgValues` turns a PHG's codes into watts, feet, dB and degrees.
