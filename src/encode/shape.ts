@@ -10,46 +10,69 @@ export const MAX_THIRD_PARTY_DEPTH = 4;
 
 type Kind = 'string' | 'number' | 'array' | 'object' | 'bytes';
 
-/** Fields a report always has, other than the text the absent-text rule covers. */
-const REQUIRED: Readonly<Record<string, Readonly<Record<string, Kind>>>> = {
-  position: { latitude: 'number', longitude: 'number' },
-  object: { latitude: 'number', longitude: 'number' },
-  item: { latitude: 'number', longitude: 'number' },
-  'mic-e': { latitude: 'number', longitude: 'number', micEMessage: 'string' },
-  message: { text: 'string' },
-  ack: { ackedId: 'string' },
-  reject: { rejectedId: 'string' },
-  bulletin: { text: 'string' },
-  'nws-bulletin': { text: 'string' },
-  'telemetry-names': { names: 'array' },
-  'telemetry-units': { units: 'array' },
-  'telemetry-coefficients': { coefficients: 'array' },
-  'telemetry-bits': { bits: 'string' },
+/** A required field: its kind, and a stand-in that adds no fault of its own, or none when nothing can be checked without it. */
+interface Required {
+  readonly kind: Kind;
+  readonly standIn?: () => unknown;
+}
+
+const req = (kind: Kind, standIn?: unknown): Required => (standIn === undefined ? { kind } : { kind, standIn: () => standIn });
+
+const LAT_LON = { latitude: req('number', 0), longitude: req('number', 0) };
+
+/**
+ * Fields a report always has, other than the text the absent-text rule covers. A field with a
+ * stand-in is replaced by it when missing or of the wrong kind, and its refusal waits for the
+ * rest of the record to be checked, so a fault earlier in the Refusal reasons order wins. Two
+ * have none, because nothing is left to check without them: an NMEA sentence (the sentence is the
+ * data) and a third-party packet (the packet is everything after the `}`).
+ */
+const REQUIRED: Readonly<Record<string, Readonly<Record<string, Required>>>> = {
+  position: LAT_LON,
+  object: LAT_LON,
+  item: LAT_LON,
+  'mic-e': { ...LAT_LON, micEMessage: req('string', 'off-duty') },
+  message: { text: req('string', '') },
+  ack: { ackedId: req('string', '1') },
+  reject: { rejectedId: req('string', '1') },
+  bulletin: { text: req('string', '') },
+  'nws-bulletin': { text: req('string', '') },
+  'telemetry-names': { names: req('array', ['A']) },
+  'telemetry-units': { units: req('array', ['V']) },
+  'telemetry-coefficients': { coefficients: req('array', [0, 1, 0]) },
+  'telemetry-bits': { bits: req('string', '00000000') },
   'directed-query': {},
   status: {},
-  telemetry: { sequence: 'string', analog: 'array' },
-  weather: { weather: 'object' },
-  'raw-weather': { format: 'string' },
-  nmea: { sentence: 'string' },
-  'maidenhead-beacon': { locator: 'string' },
+  telemetry: { sequence: req('string', '000'), analog: req('array', [0, 0, 0, 0, 0]) },
+  weather: { weather: req('object', {}) },
+  'raw-weather': { format: req('string', 'peet-bros-hash') },
+  nmea: { sentence: req('string') },
+  'maidenhead-beacon': { locator: req('string', 'AA00') },
   query: {},
-  capabilities: { capabilities: 'array' },
-  'third-party': { packet: 'object' },
-  'user-defined': { userId: 'string', packetType: 'string' },
+  capabilities: { capabilities: req('array', []) },
+  'third-party': { packet: req('object') },
+  'user-defined': { userId: req('string', 'X'), packetType: req('string', 'X') },
   test: {},
-  'agrelo-df': { bearingDegrees: 'number', quality: 'number' },
+  'agrelo-df': { bearingDegrees: req('number', 0), quality: req('number', 0) },
   unrecognized: {},
 };
 
-/** An inner packet's fields. */
-const PACKET: Readonly<Record<string, Kind>> = {
-  source: 'string',
-  destination: 'string',
-  path: 'array',
-  information: 'bytes',
-  data: 'object',
-  diagnostics: 'array',
+/** An inner packet's fields, with stand-ins that read as a well-formed header and an empty field. */
+const PACKET: Readonly<Record<string, Required>> = {
+  source: req('string', 'A'),
+  destination: req('string', 'B'),
+  path: req('array', []),
+  information: { kind: 'bytes', standIn: () => new Uint8Array(0) },
+  data: req('object', { type: 'unrecognized', reason: 'empty' }),
+  diagnostics: req('array', []),
 };
+
+const pending = new WeakMap<object, AprsEncodeError[]>();
+
+/** The shape refusals held for data until the rest of it has been checked. */
+export function pendingShapeFaults(data: object): readonly AprsEncodeError[] {
+  return pending.get(data) ?? [];
+}
 
 /** Text a report always has: left out, it is empty text (vectors interpretations.md, absent text is empty text). */
 const TEXT: Readonly<Record<string, readonly string[]>> = {
@@ -85,11 +108,20 @@ function isKind(v: unknown, kind: Kind): boolean {
   }
 }
 
-function checkFields(o: Record<string, unknown>, fields: Readonly<Record<string, Kind>>, what: string): void {
-  for (const [k, kind] of Object.entries(fields)) {
-    if (o[k] === undefined) refuse('missing-field', `${what} needs ${k}`);
-    if (!isKind(o[k], kind)) refuse('malformed', `${what}: ${k} is not a ${kind}`);
+/** Checks the required fields; gives a copy with stand-ins, and the refusals held for them. */
+function checkFields(o: Record<string, unknown>, fields: Readonly<Record<string, Required>>, what: string, held: AprsEncodeError[]): Record<string, unknown> {
+  let out = o;
+  for (const [k, r] of Object.entries(fields)) {
+    const missing = o[k] === undefined;
+    if (!missing && isKind(o[k], r.kind)) continue;
+    const code: RefusalCode = missing ? 'missing-field' : 'malformed';
+    const reason = missing ? `${what} needs ${k}` : `${what}: ${k} is not a ${r.kind}`;
+    if (r.standIn === undefined) refuse(code, reason);
+    held.push(new AprsEncodeError(reason, code));
+    if (out === o) out = { ...o };
+    out[k] = r.standIn();
   }
+  return out;
 }
 
 function isData(v: unknown): v is Record<string, unknown> {
@@ -120,11 +152,13 @@ export function checkShape(data: unknown): AprsData {
 
 function normalise(d: Record<string, unknown>): AprsData {
   const type = d.type as string;
-  checkFields(d, REQUIRED[type]!, type);
-  let out: Record<string, unknown> = d;
+  const held: AprsEncodeError[] = [];
+  const out = checkFields(d, REQUIRED[type]!, type, held);
+  const copy = (): Record<string, unknown> => (out === d ? { ...d } : out);
+  let result = out;
   const fill = (k: string, v: unknown): void => {
-    if (out === d) out = { ...d };
-    out[k] = v;
+    if (result === d) result = copy();
+    result[k] = v;
   };
   for (const k of TEXT[type] ?? []) if (typeof d[k] !== 'string') fill(k, '');
   if (POSITIONED.has(type)) {
@@ -132,11 +166,14 @@ function normalise(d: Record<string, unknown>): AprsData {
     if (!isData(s) || typeof s.table !== 'string' || typeof s.code !== 'string') fill('symbol', { table: '', code: '' });
   }
   if (type === 'third-party') {
-    const p = d.packet as Record<string, unknown>;
-    checkFields(p, PACKET, 'a third-party packet');
+    const p = checkFields(d.packet as Record<string, unknown>, PACKET, 'a third-party packet', held);
     fill('packet', { ...p, data: normalise(p.data as Record<string, unknown>) });
   }
-  return out as unknown as AprsData;
+  if (held.length > 0) {
+    if (result === d) result = copy();
+    pending.set(result, held);
+  }
+  return result as unknown as AprsData;
 }
 
 /**

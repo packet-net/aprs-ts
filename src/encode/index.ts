@@ -32,7 +32,7 @@ import {
   encodeThirdParty,
   encodeUserDefined,
 } from './other.js';
-import { checkShape, guarded } from './shape.js';
+import { checkShape, guarded, pendingShapeFaults } from './shape.js';
 import { DEFAULT_COMPRESSION, encodeItem, encodeMicE, encodeObject, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
 
 export { AprsEncodeError, DEFAULT_DESTINATION } from './common.js';
@@ -70,6 +70,8 @@ const INNER_HEADER_CODES: ReadonlySet<string> = new Set([
 ]);
 
 function attemptOnce(data: AprsData, mode: CommentMode): Attempt {
+  // A required field left out or of the wrong kind, held until the rest is checked.
+  for (const e of pendingShapeFaults(data)) flag(e.code, e.message);
   const inner = (data as { weather?: unknown }).weather;
   for (const o of [data, inner]) {
     const why = typeof o === 'object' && o !== null ? givenTwiceReason(o) : undefined;

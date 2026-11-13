@@ -125,3 +125,15 @@ describe('the header comes first', () => {
     expect(outcome(() => Aprs.from('M0LTE').position(49.5, -72.75).courseDegrees(999).speedKnots(1).build())).toBe('value-out-of-range');
   });
 });
+
+describe('a missing field does not jump the Refusal reasons order', () => {
+  it('names an earlier-ranked fault elsewhere in the record first', () => {
+    expect(outcome(() => encodeInformation({ type: 'message', addressee: 'TOOLONGCALL' } as unknown as AprsData))).toBe('invalid-addressee');
+    expect(outcome(() => encodeInformation({ type: 'position', longitude: 1, symbol: { table: 'x', code: '-' } } as unknown as AprsData))).toBe('invalid-symbol');
+    expect(outcome(() => encodeInformation({ type: 'telemetry', sequence: '001', comment: 'a\rb' } as unknown as AprsData))).toBe('invalid-character');
+    expect(outcome(() => encodeInformation({ type: 'third-party', packet: { ...inner, source: undefined, destination: 'B!', data: { type: 'status', text: 'x' } } } as unknown as AprsData))).toBe('invalid-third-party-header');
+    // With nothing else wrong, the missing field is named.
+    expect(outcome(() => encodeInformation({ type: 'message', addressee: 'N0CALL' } as unknown as AprsData))).toBe('missing-field');
+    expect(outcome(() => encodeInformation({ type: 'position', longitude: 1, symbol } as unknown as AprsData))).toBe('missing-field');
+  });
+});
