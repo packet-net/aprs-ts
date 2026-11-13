@@ -30,6 +30,14 @@ export interface DecodedInformation {
 
 /** Decodes an information field; `destination` matters for Mic-E. `options` default to lenient. */
 export function decodeInformation(information: Uint8Array, destination: string, options: ParseOptions = ParseOptions.lenient): DecodedInformation {
+  return decodeInformationAt(information, destination, options, 0);
+}
+
+/** How many third-party headers a decoder reads, one inside another (vectors interpretations.md). */
+const MAX_THIRD_PARTY_DEPTH = 4;
+
+/** Decodes an information field enclosed in `depth` third-party headers. */
+function decodeInformationAt(information: Uint8Array, destination: string, options: ParseOptions, depth: number): DecodedInformation {
   const info = information;
   const ctx = new DecodeContext(options, destination);
   let data: AprsData;
@@ -37,7 +45,7 @@ export function decodeInformation(information: Uint8Array, destination: string, 
     let end = info.length;
     while (end > 0 && (info[end - 1] === 0x0d || info[end - 1] === 0x0a)) end--;
     if (end < info.length) ctx.tolerate('trailing-line-break');
-    data = dispatch(ctx, bytesToBinary(info, 0, end), options);
+    data = dispatch(ctx, bytesToBinary(info, 0, end), options, depth);
   } catch (e) {
     if (!(e instanceof Rejected)) throw e;
     data = { type: 'unrecognized', reason: 'malformed' };
@@ -45,7 +53,7 @@ export function decodeInformation(information: Uint8Array, destination: string, 
   return { data, diagnostics: ctx.diagnostics };
 }
 
-function dispatch(ctx: DecodeContext, s: string, options: ParseOptions): AprsData {
+function dispatch(ctx: DecodeContext, s: string, options: ParseOptions, depth: number): AprsData {
   if (s.length === 0) return { type: 'unrecognized', reason: 'empty' };
   switch (s[0]) {
     case '!':
@@ -87,7 +95,7 @@ function dispatch(ctx: DecodeContext, s: string, options: ParseOptions): AprsDat
     case '{':
       return decodeUserDefined(ctx, s);
     case '}':
-      return decodeThirdParty(ctx, s, options);
+      return decodeThirdParty(ctx, s, options, depth);
     case ',':
       return decodeTest(ctx, s);
     case '[':
@@ -109,7 +117,9 @@ function dispatch(ctx: DecodeContext, s: string, options: ParseOptions): AprsDat
   }
 }
 
-function decodeThirdParty(ctx: DecodeContext, s: string, options: ParseOptions): ThirdParty {
+function decodeThirdParty(ctx: DecodeContext, s: string, options: ParseOptions, depth: number): ThirdParty {
+  // Third-party packets nest at most four deep: a fifth `}` is not read.
+  if (depth >= MAX_THIRD_PARTY_DEPTH) ctx.fail('invalid-third-party');
   const body = s.slice(1);
   const colon = body.indexOf(':');
   if (colon < 0) ctx.fail('invalid-third-party');
@@ -121,7 +131,7 @@ function decodeThirdParty(ctx: DecodeContext, s: string, options: ParseOptions):
     return ctx.fail('invalid-third-party');
   }
   const info = binaryToBytes(body.slice(colon + 1));
-  const inner = decodeInformation(info, header.destination, options);
+  const inner = decodeInformationAt(info, header.destination, options, depth + 1);
   const packet: { -readonly [K in keyof AprsPacket]: AprsPacket[K] } = {
     source: header.source,
     destination: header.destination,

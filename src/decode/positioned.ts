@@ -984,11 +984,13 @@ function weatherTail(
   w: MutableWeather,
   rest: string,
   positioned: boolean,
-): { comment?: string; telemetry?: CommentTelemetry; dao?: DaoFound } {
+  liftedDao?: (dao: DaoFound | undefined) => void,
+): { comment?: string; telemetry?: CommentTelemetry } {
   const lifted: PreLifted = positioned ? liftTelemetryAndDao(rest) : { rest };
-  const out: { comment?: string; telemetry?: CommentTelemetry; dao?: DaoFound } = {};
+  const out: { comment?: string; telemetry?: CommentTelemetry } = {};
   if (lifted.telemetry) out.telemetry = lifted.telemetry;
-  if (lifted.dao) out.dao = lifted.dao;
+  // Elements lifted out of the comment are met before the text left over is judged.
+  liftedDao?.(lifted.dao);
   let text = lifted.rest;
   if (text.length === 0) return out;
   const m = SOFTWARE_UNIT_RE.exec(text);
@@ -1193,14 +1195,13 @@ function decodeWeatherAfterPosition(ctx: DecodeContext, s: string, i: number, po
     i += 7;
   }
   const parsed = parseWeatherFields(ctx, s, i, { wind, positionless: false, compressed: pos.compressed });
-  const tail = weatherTail(ctx, parsed.weather, s.slice(parsed.end), true);
+  const tail = weatherTail(ctx, parsed.weather, s.slice(parsed.end), true, (dao) => applyDao(ctx, f, pos, dao));
   f.weather = parsed.weather;
   if (pos.compressed && pos.csBlank && !windFromCs) {
     const hasWind = parsed.weather.windDirectionDegrees !== undefined || parsed.weather.windSpeedMph !== undefined;
     if (hasWind && (windFromExtension || parsed.windFromFields)) f.compression = DEFAULT_COMPRESSION;
   }
   if (tail.telemetry) f.telemetry = tail.telemetry;
-  applyDao(ctx, f, pos, tail.dao);
   if (tail.comment !== undefined) {
     const text = ctx.text(tail.comment);
     if (text.length > 0) f.comment = text;

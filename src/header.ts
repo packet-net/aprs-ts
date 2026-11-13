@@ -156,38 +156,45 @@ interface Ax25Address {
   last: boolean;
 }
 
+/** Where an AX.25 address sits in the frame, which decides what an empty one is. */
+type Ax25Role = 'destination' | 'source' | 'path';
+
 function decodeAx25Address(
   frame: Uint8Array,
   offset: number,
+  role: Ax25Role,
   options: ParseOptions,
   diags: Diagnostic[],
 ): Ax25Address {
+  // The call is upper-case letters and digits, padded at the end with spaces (or NULs, tolerated)
+  // (AX.25 2.2 section 3.12). A lower-case letter is tolerated; anything else, a space before the
+  // last character included, would write a TNC2 header that reads back as a different one.
+  const chars: number[] = [];
+  for (let i = 0; i < 6; i++) chars.push(frame[offset + i]! >> 1);
+  let end = 6;
+  while (end > 0 && (chars[end - 1] === 0x20 || chars[end - 1] === 0x00)) end--;
+  const nulPadded = chars.slice(end).includes(0x00);
+  let lower = false;
   let call = '';
-  let padding = false;
-  let nulPadded = false;
-  let badChars = false;
-  for (let i = 0; i < 6; i++) {
-    const b = frame[offset + i]!;
-    const c = b >> 1;
-    if (c === 0x20 || c === 0x00) {
-      padding = true;
-      if (c === 0x00) nulPadded = true;
-      continue;
-    }
-    if (padding) badChars = true;
-    const ch = String.fromCharCode(c);
-    if (!/[A-Z0-9]/.test(ch)) badChars = true;
-    call += ch;
+  for (let i = 0; i < end; i++) {
+    const c = chars[i]!;
+    if (c >= 0x61 && c <= 0x7a) lower = true;
+    else if (!((c >= 0x41 && c <= 0x5a) || (c >= 0x30 && c <= 0x39))) fail(diags, 'invalid-address');
+    call += String.fromCharCode(c);
   }
   if (nulPadded) tolerate(options, diags, 'nul-padded-address');
-  if (badChars) tolerate(options, diags, 'invalid-ax25-address-characters');
   const ssidByte = frame[offset + 6]!;
+  const flag = (ssidByte & 0x80) !== 0;
+  const last = (ssidByte & 0x01) !== 0;
+  if (call.length === 0) {
+    // A call of spaces only is empty, as an empty TNC2 address is.
+    if (role === 'source') fail(diags, 'invalid-address');
+    tolerate(options, diags, role === 'destination' ? 'empty-destination' : 'empty-path-entry');
+    return { text: '', flag, last };
+  }
+  if (lower) tolerate(options, diags, 'invalid-ax25-address-characters');
   const ssid = (ssidByte >> 1) & 0x0f;
-  return {
-    text: ssid === 0 ? call : `${call}-${ssid}`,
-    flag: (ssidByte & 0x80) !== 0,
-    last: (ssidByte & 0x01) !== 0,
-  };
+  return { text: ssid === 0 ? call : `${call}-${ssid}`, flag, last };
 }
 
 /**
@@ -201,7 +208,8 @@ export function parseAx25Frame(frame: Uint8Array, options: ParseOptions): Parsed
     let offset = 0;
     for (;;) {
       if (offset + 7 > frame.length) fail(diags, 'not-aprs-frame');
-      const address = decodeAx25Address(frame, offset, options, diags);
+      const role: Ax25Role = addresses.length === 0 ? 'destination' : addresses.length === 1 ? 'source' : 'path';
+      const address = decodeAx25Address(frame, offset, role, options, diags);
       addresses.push(address);
       offset += 7;
       if (address.last) break;
@@ -213,7 +221,7 @@ export function parseAx25Frame(frame: Uint8Array, options: ParseOptions): Parsed
     const pid = frame[offset + 1]!;
     if ((control & ~0x10) !== 0x03 || pid !== 0xf0) fail(diags, 'not-aprs-frame');
     const [dest, src, ...digis] = addresses;
-    const path = markUsed(digis.map((d) => ({ address: d.text, marked: d.flag })));
+    const path = markUsed(digis.map((d) => ({ address: d.text, marked: d.flag }))).filter((e) => e.address !== '');
     return {
       source: src!.text,
       destination: dest!.text,
