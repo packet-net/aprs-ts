@@ -203,7 +203,7 @@ export function encodeNmea(d: NmeaSentence): string {
   if (!parts || parts.rest.length > 0) flag('invalid-nmea', 'not an NMEA 0183 sentence');
   else if (!parts.checksumOk) flag('invalid-nmea', "the NMEA sentence's checksum does not match");
   const comment = d.comment ?? '';
-  if (parts && comment.length > 0 && !parts.hasChecksum) flag('missing-field', 'a comment after an NMEA sentence needs the checksum that ends the sentence');
+  if (parts && comment.length > 0 && !parts.hasChecksum) flag('invalid-nmea', 'a comment after an NMEA sentence needs the checksum that ends the sentence');
   return `$${d.sentence}${freeText(comment, 'the comment')}`;
 }
 
@@ -277,6 +277,9 @@ export function checkThirdPartyHeader(d: ThirdParty): void {
   if (!/^[\x20-\x39\x3b-\x3d\x3f-\x7e]{1,9}$/.test(p.source)) flag('invalid-third-party-header', 'a third-party source is 1-9 printable ASCII characters other than > and :');
   if (!isAprsIsAddress(p.destination)) flag('invalid-third-party-header', 'the third-party destination is not a valid address');
   for (const e of p.path) if (!isAprsIsAddress(e.address)) flag('invalid-third-party-header', `the third-party path entry ${JSON.stringify(e.address)} is not a valid address`);
+  // A path entry before a used one is used, so one not marked would read back marked.
+  const lastUsed = p.path.map((e) => e.used).lastIndexOf(true);
+  if (lastUsed > 0 && p.path.slice(0, lastUsed).some((e) => !e.used)) flag('invalid-third-party-header', 'a third-party path entry before a used one is used too');
 }
 
 /** The third-party header and the encapsulated packet's information field. */

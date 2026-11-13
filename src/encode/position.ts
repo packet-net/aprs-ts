@@ -289,7 +289,8 @@ export function frequencyText(f: VoiceFrequency): string {
 }
 
 export function telemetryText(t: CommentTelemetry): string {
-  if (t.analog.length < 1 || t.analog.length > 5) flag('too-long', 'comment telemetry has 1-5 analog values');
+  if (t.analog.length > 5) flag('too-long', 'comment telemetry has 1-5 analog values');
+  else if (t.analog.length < 1) flag('malformed', 'comment telemetry has 1-5 analog values');
   if (t.digital !== undefined && t.analog.length !== 5) flag('malformed', 'comment telemetry bits come after all five analog values');
   const v = (n: number, what: string): string => base91(whole(n, 0, 8280, what), 2);
   let out = '|' + v(t.sequence, 'telemetry sequence');
@@ -309,7 +310,7 @@ function daoText(f: PositionedFields, latExtra: number, lonExtra: number, applie
   if (!applied) flag('field-not-allowed', 'a !DAO! adds precision to a position that is ambiguous');
   if (/^[0-9]$/.test(datum)) {
     // A local datum digit has no case to give a precision, so it only goes with spaces.
-    if (dao.precision !== 'none') flag('field-not-allowed', 'a !DAO! datum digit carries no added precision');
+    if (dao.precision !== 'none') flag('invalid-code', 'a !DAO! datum digit carries no added precision');
     return `!${datum}  !`;
   }
   if (!/^[A-Za-z]$/.test(datum)) flag('invalid-code', 'the !DAO! datum is a letter or a digit');
@@ -486,32 +487,41 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
     latExtra = pos.latExtra;
     lonExtra = pos.lonExtra;
     daoApplied = (f.ambiguity ?? 0) === 0;
+    // Every extension given is checked on its own, even one that conflicts with another: a field
+    // whose place exists but is wanted twice keeps its own checks (vectors interpretations.md).
+    let courseText: string | undefined;
     if (hasCourse) {
       // DF or storm data with no course and speed follows `.../...`, which reads back as unknown
       // (vectors rulings, F8).
-      out += courseSpeed(f.courseDegrees, f.speedKnots);
+      courseText = courseSpeed(f.courseDegrees, f.speedKnots);
       if (f.dfBearing) {
         const b = f.dfBearing;
-        out += `/${pad(whole(b.bearingDegrees, 0, 360, 'bearing'), 3)}/${whole(b.number, 0, 9, 'N')}${whole(b.range, 0, 9, 'R')}${whole(b.quality, 0, 9, 'Q')}`;
+        courseText += `/${pad(whole(b.bearingDegrees, 0, 360, 'bearing'), 3)}/${whole(b.number, 0, 9, 'N')}${whole(b.range, 0, 9, 'R')}${whole(b.quality, 0, 9, 'Q')}`;
       }
-      if (f.storm) out += stormText(f.storm);
-    } else if (f.phg) {
+      if (f.storm) courseText += stormText(f.storm);
+    }
+    let phgText: string | undefined;
+    if (f.phg) {
       const p = f.phg;
-      out += `PHG${whole(p.power, 0, 9, 'power code')}${heightChar(p.height)}${whole(p.gain, 0, 9, 'gain code')}${whole(p.directivity, 0, 9, 'directivity code')}`;
-      if (p.beaconsPerHour !== undefined) out += rateChar(p.beaconsPerHour) + '/';
-    } else if (f.rangeMiles !== undefined) {
-      out += 'RNG' + pad(whole(f.rangeMiles, 0, 9999, 'range'), 4);
-    } else if (f.dfs) {
+      phgText = `PHG${whole(p.power, 0, 9, 'power code')}${heightChar(p.height)}${whole(p.gain, 0, 9, 'gain code')}${whole(p.directivity, 0, 9, 'directivity code')}`;
+      if (p.beaconsPerHour !== undefined) phgText += rateChar(p.beaconsPerHour) + '/';
+    }
+    const rngText = f.rangeMiles !== undefined ? 'RNG' + pad(whole(f.rangeMiles, 0, 9999, 'range'), 4) : undefined;
+    let dfsText: string | undefined;
+    if (f.dfs) {
       const d = f.dfs;
-      out += `DFS${whole(d.strength, 0, 9, 'strength')}${heightChar(d.height)}${whole(d.gain, 0, 9, 'gain code')}${whole(d.directivity, 0, 9, 'directivity code')}`;
-    } else if (f.area) {
+      dfsText = `DFS${whole(d.strength, 0, 9, 'strength')}${heightChar(d.height)}${whole(d.gain, 0, 9, 'gain code')}${whole(d.directivity, 0, 9, 'directivity code')}`;
+    }
+    let areaText: string | undefined;
+    if (f.area) {
       const a = f.area;
       const shape = AREA_SHAPES.indexOf(a.shape);
       const color = AREA_COLORS.indexOf(a.color);
       if (shape < 0 || color < 0) flag('invalid-code', 'unknown area shape or colour');
       const c = color < 10 ? `/${color}` : String(color);
-      out += `${shape}${pad(whole(a.latOffset, 0, 99, 'area offset'), 2)}${c}${pad(whole(a.lonOffset, 0, 99, 'area offset'), 2)}`;
+      areaText = `${shape}${pad(whole(a.latOffset, 0, 99, 'area offset'), 2)}${c}${pad(whole(a.lonOffset, 0, 99, 'area offset'), 2)}`;
     }
+    out += courseText ?? phgText ?? rngText ?? dfsText ?? areaText ?? '';
   }
   // After the data extension: the frequency with its fields, first, where radios read it (APRS12c
   // ch. 18); the signpost or corridor braces; the altitude, unless the compressed cs bytes carry it

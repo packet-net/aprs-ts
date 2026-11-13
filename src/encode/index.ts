@@ -224,7 +224,12 @@ function check(data: AprsData, a: Attempt): Problem[] {
   }
   // An NMEA sentence is written as it is, so everything read from it must be what the data says.
   const shape: Problem[] = [];
-  shapeDifferences(withoutInnerInfo(toNeutralData(decoded.data)), withoutInnerInfo(toNeutralData(expected(data, a))), '', shape, data.type === 'nmea');
+  const got = withoutInnerInfo(toNeutralData(decoded.data));
+  let want = withoutInnerInfo(toNeutralData(expected(data, a)));
+  // NMEA data is its sentence: a field left out is the one the sentence gives (vectors
+  // interpretations.md, NMEA data is its sentence).
+  if (data.type === 'nmea') want = { ...got, ...want };
+  shapeDifferences(got, want, '', shape, data.type === 'nmea');
   // Whatever differs in a sentence read back is a field that disagrees with it.
   for (const p of shape) problems.push(data.type === 'nmea' ? problem('invalid-nmea', p.text) : p);
   return problems;
