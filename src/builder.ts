@@ -349,7 +349,6 @@ abstract class PositionedBuilder<Self> {
   /** Altitude, feet, sent as a `/A=` in whole feet (rounded to the nearest, halves away from zero). */
   altitudeFeet(feet: number): Self {
     this.fields.altitudeFeet = feet;
-    if (this.altitudeUnit === 'metres') this.altitudeTwice = true;
     this.altitudeUnit = 'feet';
     return this.self();
   }
@@ -360,20 +359,12 @@ abstract class PositionedBuilder<Self> {
    */
   altitudeM(metres: number): Self {
     this.fields.altitudeFeet = metres / 0.3048;
-    if (this.altitudeUnit === 'feet') this.altitudeTwice = true;
     this.altitudeUnit = 'metres';
     return this.self();
   }
 
-  /** The unit the altitude was given in. */
+  /** The unit the altitude was last given in: a setter replaces the altitude whatever its unit (vectors README, Builder). */
   protected altitudeUnit: 'feet' | 'metres' | undefined;
-
-  private altitudeTwice = false;
-
-  /** An altitude given in feet and in metres is refused when the report is encoded, as a weather value in two units is. */
-  protected markTwice<T extends object>(data: T): T {
-    return this.altitudeTwice ? markGivenTwice(data, 'the altitude is given in two units') : data;
-  }
 
   /** Free text. */
   comment(text: string): Self {
@@ -466,7 +457,7 @@ export class PositionBuilder extends ReportBuilder<PositionBuilder> {
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.timestampValue) data.timestamp = this.timestampValue;
     if (this.messagingValue) data.messaging = true;
-    return built(this.header, this.markTwice(data));
+    return built(this.header, data);
   }
 
   toTnc2(): string {
@@ -513,7 +504,7 @@ export class ObjectBuilder extends ReportBuilder<ObjectBuilder> {
     };
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.killedValue) data.killed = true;
-    return built(this.header, this.markTwice(data));
+    return built(this.header, data);
   }
 
   toTnc2(): string {
@@ -548,7 +539,7 @@ export class ItemBuilder extends ReportBuilder<ItemBuilder> {
     const data: Mutable<Extract<AprsData, { type: 'item' }>> = { type: 'item', name: this.name, ...this.fields };
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.killedValue) data.killed = true;
-    return built(this.header, this.markTwice(data));
+    return built(this.header, data);
   }
 
   toTnc2(): string {
@@ -601,7 +592,7 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
     if (this.typeCodeValue !== undefined) data.typeCode = this.typeCodeValue;
     if (this.locatorValue !== undefined) data.locator = this.locatorValue;
     if (this.oldValue) data.oldData = true;
-    return built(this.header, this.markTwice(data));
+    return built(this.header, data);
   }
 
   toTnc2(): string {

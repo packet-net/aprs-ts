@@ -173,6 +173,20 @@ export function pathEntryN(e: PathEntry): string {
 
 /** A packet's data in the neutral form. */
 export function toNeutralData(d: AprsData): Neutral {
+  // A third-party chain is walked without recursion, so data a caller nested thousands deep
+  // converts without a stack overflow.
+  const chain: AprsPacket[] = [];
+  let level = d;
+  while (level.type === 'third-party') {
+    chain.push(level.packet);
+    level = level.packet.data;
+  }
+  let o = toNeutralLevel(level);
+  for (let i = chain.length - 1; i >= 0; i--) o = { type: 'third-party', packet: toNeutralInner(chain[i]!, o) };
+  return o;
+}
+
+function toNeutralLevel(d: AprsData): Neutral {
   const o: Neutral = { type: d.type };
   switch (d.type) {
     case 'position':
@@ -300,9 +314,6 @@ export function toNeutralData(d: AprsData): Neutral {
     case 'capabilities':
       if (d.capabilities.length > 0) o.capabilities = d.capabilities.map((c) => [...c]);
       break;
-    case 'third-party':
-      o.packet = toNeutralInner(d.packet);
-      break;
     case 'user-defined':
       o.user_id = d.userId;
       o.packet_type = d.packetType;
@@ -322,10 +333,10 @@ export function toNeutralData(d: AprsData): Neutral {
   return o;
 }
 
-function toNeutralInner(p: AprsPacket): Neutral {
+function toNeutralInner(p: AprsPacket, data: Neutral): Neutral {
   const o: Neutral = { source: p.source, destination: p.destination };
   put(o, 'path', p.path.map(pathEntryN));
-  o.data = toNeutralData(p.data);
+  o.data = data;
   put(o, 'diagnostics', p.diagnostics.map(formatDiagnostic));
   return o;
 }
@@ -451,6 +462,33 @@ function positionedFrom(o: Record<string, unknown>, d: J): void {
 
 /** Data from the neutral form. */
 export function fromNeutralData(d: J): AprsData {
+  // A third-party chain is walked without recursion, as in toNeutralData.
+  const chain: J[] = [];
+  let level = d;
+  while (level.type === 'third-party') {
+    const p: J = level.packet ?? {};
+    chain.push(p);
+    level = p.data ?? { type: 'unrecognized', reason: 'empty' };
+  }
+  let o = fromNeutralLevel(level);
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const p = chain[i]!;
+    // The inner packet as data: its information field is written from its data, and its
+    // diagnostics are kept, so one with a tolerated defect is refused, as the Encoding rule says.
+    const packet = {
+      source: p.source ?? '',
+      destination: p.destination ?? '',
+      path: ((p.path ?? []) as string[]).map((e) => (e.endsWith('*') ? { address: e.slice(0, -1), used: true } : { address: e, used: false })),
+      information: new Uint8Array(0),
+      data: o,
+      diagnostics: ((p.diagnostics ?? []) as string[]).map(diagnosticFrom),
+    };
+    o = { type: 'third-party', packet } as unknown as AprsData;
+  }
+  return o;
+}
+
+function fromNeutralLevel(d: J): AprsData {
   const o: Record<string, unknown> = { type: d.type };
   switch (d.type as AprsData['type']) {
     case 'position':
@@ -591,20 +629,6 @@ export function fromNeutralData(d: J): AprsData {
     case 'unrecognized':
       o.reason = d.reason;
       break;
-    case 'third-party': {
-      // The inner packet as data: its information field is written from its data, and its
-      // diagnostics are kept, so one with a tolerated defect is refused, as the Encoding rule says.
-      const p: J = d.packet ?? {};
-      o.packet = {
-        source: p.source ?? '',
-        destination: p.destination ?? '',
-        path: ((p.path ?? []) as string[]).map((e) => (e.endsWith('*') ? { address: e.slice(0, -1), used: true } : { address: e, used: false })),
-        information: new Uint8Array(0),
-        data: fromNeutralData(p.data ?? { type: 'unrecognized', reason: 'empty' }),
-        diagnostics: ((p.diagnostics ?? []) as string[]).map(diagnosticFrom),
-      };
-      break;
-    }
   }
   return o as unknown as AprsData;
 }

@@ -3,6 +3,7 @@
 
 import { encodeUtf8 } from './bytes.js';
 import { ax25Of, tnc2TextOf } from './encode/index.js';
+import { guarded } from './encode/shape.js';
 import { formatTnc2Header } from './header.js';
 import type { AprsPacket, Phg } from './types.js';
 
@@ -21,11 +22,13 @@ export function hasWarnings(packet: AprsPacket): boolean {
  * field exactly as received. Nothing is checked or re-encoded.
  */
 export function packetToTnc2Bytes(packet: AprsPacket): Uint8Array {
-  const header = encodeUtf8(`${formatTnc2Header(packet.source, packet.destination, packet.path)}:`);
-  const out = new Uint8Array(header.length + packet.information.length);
-  out.set(header, 0);
-  out.set(packet.information, header.length);
-  return out;
+  return guarded(() => {
+    const header = encodeUtf8(`${formatTnc2Header(packet.source, packet.destination, packet.path)}:`);
+    const out = new Uint8Array(header.length + packet.information.length);
+    out.set(header, 0);
+    out.set(packet.information, header.length);
+    return out;
+  });
 }
 
 /**
@@ -44,7 +47,7 @@ export function packetToTnc2(packet: AprsPacket): string {
  * an SSID written with a leading zero, an SSID over 15) or the path has more than 8 entries.
  */
 export function packetToAx25(packet: AprsPacket): Uint8Array {
-  return ax25Of(packet.source, packet.destination, packet.path, packet.information);
+  return guarded(() => ax25Of(packet.source, packet.destination, packet.path, packet.information));
 }
 
 /** What a PHG's codes stand for. */

@@ -496,9 +496,11 @@ describe('1.0 API', () => {
       expect(codeOf(() => packetToAx25(inner))).toBe('ax25-cannot-carry');
     });
 
-    it('refuses an altitude given in two units, after the faults that come first', () => {
-      expect(codeOf(() => Aprs.from('M0LTE').position(51, -1).altitudeFeet(10).altitudeM(3).build())).toBe('value-given-twice');
-      expect(codeOf(() => Aprs.from('M0LTE').position(91, -1).altitudeFeet(10).altitudeM(3).build())).toBe('value-out-of-range');
+    it('takes the last altitude setter whatever its unit, as a kept builder does', () => {
+      const p = decodeTnc2(Aprs.from('M0LTE').position(51, -1).altitudeFeet(1000).altitudeM(100).toTnc2());
+      expect(p.data).toMatchObject({ altitudeFeet: 328 });
+      const q = decodeTnc2(Aprs.from('M0LTE').position(51, -1).altitudeM(100).altitudeFeet(1000).toTnc2());
+      expect(q.data).toMatchObject({ altitudeFeet: 1000 });
     });
 
     it('calls too few telemetry values malformed', () => {

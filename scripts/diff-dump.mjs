@@ -246,19 +246,34 @@ function decodeRecord(n, line) {
 
 // ---- encode
 
-/** The keys `a` holds that `b` does not, as paths: what a conversion lost. */
-function lostKeys(a, b, path, out) {
-  if (Array.isArray(a)) {
-    if (Array.isArray(b)) a.forEach((x, i) => lostKeys(x, b[i], `${path}[${i}]`, out));
-  } else if (a && typeof a === 'object') {
-    for (const k of Object.keys(a)) {
-      const p = path ? `${path}.${k}` : k;
-      // An ack or reject with a message ID of its own, and an empty list (no analog values, no
-      // capabilities), are data the encoder refuses, not data aprs-ts lacks.
-      if (k === 'message_id' && (a.type === 'ack' || a.type === 'reject')) continue;
-      if (Array.isArray(a[k]) && a[k].length === 0) continue;
-      if (!b || typeof b !== 'object' || !(k in b)) out.push(p);
-      else lostKeys(a[k], b[k], p, out);
+/**
+ * The keys `a` holds that `b` does not, as paths: what a conversion lost. Walked with a stack, and
+ * a path is spelled out only for a key lost, so data nested thousands deep costs no recursion.
+ */
+function lostKeys(a, b, out) {
+  const spell = (node) => {
+    const parts = [];
+    for (let n = node; n.parent; n = n.parent) parts.push(n.key);
+    return parts.reverse().reduce((p, k) => (typeof k === 'number' ? `${p}[${k}]` : p ? `${p}.${k}` : k), '');
+  };
+  const stack = [{ a, b, parent: undefined, key: undefined }];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    const { a: x, b: y } = node;
+    if (Array.isArray(x)) {
+      if (Array.isArray(y)) x.forEach((v, i) => stack.push({ a: v, b: y[i], parent: node, key: i }));
+    } else if (x && typeof x === 'object') {
+      for (const k of Object.keys(x)) {
+        // An ack or reject with a message ID of its own, a telemetry report with no analog values
+        // and a capabilities report with no items are data the encoder refuses, not data aprs-ts
+        // lacks.
+        if (k === 'message_id' && (x.type === 'ack' || x.type === 'reject')) continue;
+        if (k === 'analog' && x.type === 'telemetry' && Array.isArray(x[k]) && x[k].length === 0) continue;
+        if (k === 'capabilities' && x.type === 'capabilities' && Array.isArray(x[k]) && x[k].length === 0) continue;
+        const child = { a: x[k], b: y?.[k], parent: node, key: k };
+        if (!y || typeof y !== 'object' || !(k in y)) out.push(spell(child));
+        else stack.push(child);
+      }
     }
   }
   return out;
@@ -274,7 +289,7 @@ function encodeRecord(n, line) {
     throw e;
   }
   // Anything the data form holds that aprs-ts's data does not is unsupported, not silently dropped.
-  const lost = lostKeys(data, toNeutralData(own), '', []);
+  const lost = lostKeys(data, toNeutralData(own), []);
   if (lost.length > 0) return { n, result: 'unsupported', reason: `aprs-ts data has no ${lost.join(', ')}` };
   let encoded;
   try {

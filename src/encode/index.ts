@@ -32,6 +32,7 @@ import {
   encodeThirdParty,
   encodeUserDefined,
 } from './other.js';
+import { checkShape, guarded } from './shape.js';
 import { DEFAULT_COMPRESSION, encodeItem, encodeMicE, encodeObject, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
 
 export { AprsEncodeError, DEFAULT_DESTINATION } from './common.js';
@@ -254,6 +255,10 @@ function withoutInnerInfo(n: Record<string, unknown>): Record<string, unknown> {
  * Throws `AprsEncodeError`, with the reason, for anything the spec does not allow.
  */
 export function encodeInformation(data: AprsData): EncodedInformation {
+  return guarded(() => encodeShaped(checkShape(data)));
+}
+
+function encodeShaped(data: AprsData): EncodedInformation {
   const first = attempt(data, 'plain');
   let problems = check(data, first);
   let chosen = first;
@@ -324,9 +329,11 @@ export function tnc2TextOf(bytes: Uint8Array): string {
 
 /** Encodes a packet as the bytes of a TNC2 / APRS-IS line (the information field as sent). */
 export function encodeTnc2Bytes(p: PacketToEncode): Uint8Array {
-  const r = resolve(p);
-  checkHeaderAddresses(p.source, r.destination, r.path);
-  return tnc2BytesOf(p.source, r.destination, r.path, r.information);
+  return guarded(() => {
+    const r = resolve(p);
+    checkHeaderAddresses(p.source, r.destination, r.path);
+    return tnc2BytesOf(p.source, r.destination, r.path, r.information);
+  });
 }
 
 /**
@@ -366,8 +373,10 @@ export function ax25Of(source: string, destination: string, path: readonly (stri
 
 /** Encodes a packet as an AX.25 UI frame in KISS form (no flags, no FCS). */
 export function encodeAx25(p: PacketToEncode): Uint8Array {
-  const r = resolve(p);
-  return ax25Of(p.source, r.destination, p.path ?? [], r.information);
+  return guarded(() => {
+    const r = resolve(p);
+    return ax25Of(p.source, r.destination, p.path ?? [], r.information);
+  });
 }
 
 /** Wraps an AX.25 frame for a KISS TNC: FEND, a data command on `port`, escaping, FEND. */
