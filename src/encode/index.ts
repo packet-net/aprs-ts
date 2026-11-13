@@ -298,6 +298,11 @@ function pathText(entry: string | PathEntry): string {
   return typeof entry === 'string' ? entry : entry.used ? `${entry.address}*` : entry.address;
 }
 
+/** The destination to check before the data is encoded: a Mic-E one is computed, and always valid. */
+function givenDestination(p: PacketToEncode): string {
+  return (p.data as { type?: unknown } | undefined)?.type === 'mic-e' ? DEFAULT_DESTINATION : (p.destination ?? DEFAULT_DESTINATION);
+}
+
 function resolve(p: PacketToEncode): { destination: string; information: Uint8Array; path: string[] } {
   const encoded = encodeInformation(p.data);
   const destination = encoded.destination ?? p.destination ?? DEFAULT_DESTINATION;
@@ -330,6 +335,8 @@ export function tnc2TextOf(bytes: Uint8Array): string {
 /** Encodes a packet as the bytes of a TNC2 / APRS-IS line (the information field as sent). */
 export function encodeTnc2Bytes(p: PacketToEncode): Uint8Array {
   return guarded(() => {
+    // The header is written first, so its faults come before any in the data.
+    checkHeaderAddresses(p.source, givenDestination(p), (p.path ?? []).map(pathText));
     const r = resolve(p);
     checkHeaderAddresses(p.source, r.destination, r.path);
     return tnc2BytesOf(p.source, r.destination, r.path, r.information);
@@ -374,6 +381,8 @@ export function ax25Of(source: string, destination: string, path: readonly (stri
 /** Encodes a packet as an AX.25 UI frame in KISS form (no flags, no FCS). */
 export function encodeAx25(p: PacketToEncode): Uint8Array {
   return guarded(() => {
+    // The header is written first, so what AX.25 cannot carry comes before any fault in the data.
+    ax25Of(p.source, givenDestination(p), p.path ?? [], new Uint8Array(0));
     const r = resolve(p);
     return ax25Of(p.source, r.destination, p.path ?? [], r.information);
   });

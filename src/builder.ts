@@ -69,10 +69,14 @@ function pathText(entry: PathEntry): string {
 
 /** Encodes the data and checks the header's addresses, so a `BuiltPacket` can always be written. */
 function built(header: Header, data: AprsData): BuiltPacket {
-  const encoded = encodeInformation(data);
-  const destination = encoded.destination ?? header.destination ?? DEFAULT_DESTINATION;
   const path = header.path.map((e) => Object.freeze({ ...e }));
   const text = path.map(pathText);
+  // The header is written first, so its faults come before any in the data (vectors README,
+  // Refusal reasons); a Mic-E destination is computed, and always a valid address.
+  const given = data.type === 'mic-e' ? DEFAULT_DESTINATION : (header.destination ?? DEFAULT_DESTINATION);
+  checkHeaderAddresses(header.source, given, text);
+  const encoded = encodeInformation(data);
+  const destination = encoded.destination ?? header.destination ?? DEFAULT_DESTINATION;
   checkHeaderAddresses(header.source, destination, text);
   const information = encoded.information;
   const frame = (): Uint8Array => ax25Of(header.source, destination, path, information);

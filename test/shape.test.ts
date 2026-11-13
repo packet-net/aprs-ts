@@ -2,7 +2,7 @@
 // with an AprsEncodeError and a reason code, never with another error.
 
 import { describe, expect, it } from 'vitest';
-import { AprsEncodeError, encodeAx25, encodeInformation, encodeTnc2, packetToAx25, packetToTnc2, type AprsData } from '../src/index.js';
+import { Aprs, AprsEncodeError, encodeAx25, encodeInformation, encodeTnc2, packetToAx25, packetToTnc2, type AprsData } from '../src/index.js';
 import { fromNeutralData, toNeutralData } from '../src/neutral.js';
 
 const symbol = { table: '/', code: '-' };
@@ -112,5 +112,16 @@ describe('third-party nesting', () => {
     expect(outcome(() => encodeTnc2({ source: 'N0CALL', data: deep }))).toBe('invalid-third-party-header');
     const neutral = toNeutralData(deep);
     expect(outcome(() => encodeInformation(fromNeutralData(neutral)))).toBe('invalid-third-party-header');
+  });
+});
+
+describe('the header comes first', () => {
+  it('refuses a bad source before a fault in the data, in the builders and the packet encoders', () => {
+    expect(outcome(() => Aprs.from('BAD!!').position(49.5, -72.75).courseDegrees(999).speedKnots(1).build())).toBe('invalid-address');
+    expect(outcome(() => Aprs.from('BAD!!').micE(49.5, -72.75).courseDegrees(999).speedKnots(1).build())).toBe('invalid-address');
+    const bad = { type: 'position', ...at, courseDegrees: 999, speedKnots: 1 } as unknown as AprsData;
+    expect(outcome(() => encodeTnc2({ source: 'BAD!!', data: bad }))).toBe('invalid-address');
+    expect(outcome(() => encodeAx25({ source: 'TOOLONGCALL', data: bad }))).toBe('ax25-cannot-carry');
+    expect(outcome(() => Aprs.from('M0LTE').position(49.5, -72.75).courseDegrees(999).speedKnots(1).build())).toBe('value-out-of-range');
   });
 });

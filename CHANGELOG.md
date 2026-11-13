@@ -10,6 +10,8 @@ Encoding: which refusal code. Base-91 telemetry with no analog values is `malfor
 
 Encoding: data built by hand. The encoder checks the shape of what it is given before reading it, so no public encoding call (`encodeInformation`, `encodeTnc2`, `encodeTnc2Bytes`, `encodeAx25`, `packetToTnc2`, `packetToAx25` and the builders) throws anything but an `AprsEncodeError` on any object. Text a report always has is empty text when left out: a missing name is `invalid-name`, a missing addressee `invalid-addressee`, a missing query type `invalid-code` and a missing or unusable positioned symbol `invalid-symbol`. Any other required field left out is `missing-field`, and a field of the wrong kind is `malformed`. Third-party data nested more than four deep is refused as `invalid-third-party-header`, before any fault inside it; the chain is walked without recursion, in the encoder and in the neutral-form conversion, so a caller-built chain 10,000 deep is refused, not a stack overflow.
 
+The header comes first: a builder, `encodeTnc2`, `encodeTnc2Bytes` and `encodeAx25` check the source, destination and path before the data, so a bad source with an out-of-range course is `invalid-address` (or `ax25-cannot-carry`), not `value-out-of-range`.
+
 Builder. A setter replaces its quantity whatever unit it was given in, so on a kept builder the last altitude setter wins again (`.altitudeFeet(1000).altitudeM(100)` sends 328 feet). This reverses 1.0.1, where `.altitudeFeet()` and `.altitudeM()` together were refused with `value-given-twice`; that refusal is now only for one input that carries the same quantity in two units at once, such as a weather input with `temperatureF` and `temperatureC`.
 
 ### Behaviour changes for 1.x callers
