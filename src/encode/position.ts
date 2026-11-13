@@ -688,13 +688,10 @@ export function encodePositionReport(d: PositionReport, mode: CommentMode): Body
 }
 
 export function encodeObject(d: ObjectReport, mode: CommentMode): Body {
-  // Data built by hand, not checked by the type system, may have no name at all.
+  // Data built by hand, not checked by the type system, may have no name at all: an empty name.
   const name = typeof d.name === 'string' ? d.name : '';
-  if (typeof d.name !== 'string') flag('missing-field', 'an object report needs a name');
-  else {
-    if (!/^[\x20-\x7e]{1,9}$/.test(name)) flag('invalid-name', 'an object name is 1-9 printable ASCII characters');
-    if (name.endsWith(' ')) flag('padding-space', 'an object name cannot end in a space, which reads as padding');
-  }
+  if (!/^[\x20-\x7e]{1,9}$/.test(name)) flag('invalid-name', 'an object name is 1-9 printable ASCII characters');
+  if (name.endsWith(' ')) flag('padding-space', 'an object name cannot end in a space, which reads as padding');
   if (!d.timestamp) flag('missing-field', 'an object report always has a timestamp');
   const ts = d.timestamp ? timestamp7(d.timestamp) : '';
   const body = positionedBody(d, mode);
@@ -702,13 +699,10 @@ export function encodeObject(d: ObjectReport, mode: CommentMode): Body {
 }
 
 export function encodeItem(d: ItemReport, mode: CommentMode): Body {
-  // Data built by hand, not checked by the type system, may have no name at all.
+  // Data built by hand, not checked by the type system, may have no name at all: an empty name.
   const name = typeof d.name === 'string' ? d.name : '';
-  if (typeof d.name !== 'string') flag('missing-field', 'an item report needs a name');
-  else {
-    if (!/^[\x20-\x7e]{3,9}$/.test(name)) flag('invalid-name', 'an item name is 3-9 printable ASCII characters');
-    if (/[!_]/.test(name)) flag('invalid-name', 'an item name cannot contain ! or _');
-  }
+  if (!/^[\x20-\x7e]{3,9}$/.test(name)) flag('invalid-name', 'an item name is 3-9 printable ASCII characters');
+  if (/[!_]/.test(name)) flag('invalid-name', 'an item name cannot contain ! or _');
   const body = positionedBody(d, mode);
   return { ...body, text: ')' + name + (d.killed ? '_' : '!') + body.text };
 }

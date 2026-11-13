@@ -6,6 +6,7 @@ import {
   AprsEncodeError,
   REFUSAL_CODES,
   REFUSAL_MEANINGS,
+  type AprsData,
   type RefusalCode,
   AprsHeaderError,
   Aprs,
@@ -240,6 +241,15 @@ describe('encoder refusals no conformance case pins', () => {
     expect(() => encodeInformation(status)).toThrow(AprsEncodeError);
     const inner = decodeTnc2('N0CALL>APZ001:}N0CALL>APZ,WIDE1-1*,WIDE2-1*:>x');
     expect(() => encodeInformation(inner.data)).toThrow(AprsEncodeError);
+  });
+
+  it('refuses an object or item built by hand with no name as invalid-name, not with a TypeError', () => {
+    const at = { latitude: 49.5, longitude: -72.75, symbol: { table: '/', code: '-' } } as const;
+    const object = { type: 'object', timestamp: { kind: 'dhm-zulu', day: 9, hour: 23, minute: 45 }, ...at } as unknown as AprsData;
+    const item = { type: 'item', ...at } as unknown as AprsData;
+    for (const data of [object, item]) {
+      expect(() => encodeInformation(data)).toThrow(expect.objectContaining({ name: 'AprsEncodeError', code: 'invalid-name' }));
+    }
   });
 });
 
