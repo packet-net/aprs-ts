@@ -663,9 +663,8 @@ function weatherBody(f: PositionedFields): Body {
     out += courseSpeed(w.windDirectionDegrees, w.windSpeedMph, 'wind direction');
     out += weatherFields(w, true);
   }
-  // Comment telemetry is refused on a weather report, but still gets its own checks, as the other
-  // libraries do (the vectors do not decide this).
-  if (f.telemetry) out += telemetryText(f.telemetry);
+  // Comment telemetry has no place in a weather report (field-not-allowed, flagged above), so its own
+  // checks do not run.
   if (f.dao) out += daoText(f, latExtra, lonExtra, daoApplied);
   const body: Body = { text: out };
   if (compression) body.compression = compression;

@@ -128,8 +128,8 @@ export function encodeTelemetryBits(d: TelemetryBits): string {
 }
 
 export function encodeDirectedQuery(d: DirectedQuery): string {
-  if (d.queryType === '') flag('missing-field', 'a query needs a type');
-  else if (!/^(?:[A-Z]+|PING\?)$/.test(d.queryType)) flag('invalid-code', 'a query type is upper-case letters');
+  // Absent text is empty text, so a query with no type has an invalid one (vectors interpretations.md).
+  if (!/^(?:[A-Z]+|PING\?)$/.test(d.queryType)) flag('invalid-code', 'a query type is upper-case letters');
   let out = `:${addressee(d.addressee)}:?${d.queryType}`;
   if (d.target !== undefined) {
     if (!/^[A-Za-z0-9-]{1,9}$/.test(d.target)) flag('invalid-addressee', 'a query target is one callsign');
@@ -218,9 +218,8 @@ export function encodeMaidenhead(d: MaidenheadBeacon): string {
 }
 
 export function encodeQuery(d: Query): string {
-  // A query with no type is missing it (vectors case encode/query-without-a-type-and-radius-too-big).
-  if (d.queryType === '') flag('missing-field', 'a query needs a type');
-  else if (!/^[A-Z]+$/.test(d.queryType)) flag('invalid-code', 'a query type is upper-case letters');
+  // Absent text is empty text, so a query with no type has an invalid one (vectors interpretations.md).
+  if (!/^[A-Z]+$/.test(d.queryType)) flag('invalid-code', 'a query type is upper-case letters');
   let out = `?${d.queryType}?`;
   if (d.footprint) {
     const f = d.footprint;
