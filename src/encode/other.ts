@@ -41,7 +41,11 @@ function addressee(a: string): string {
 
 function messageId(id: string | undefined, replyAck: string | undefined): string {
   if (id === undefined) {
-    if (replyAck !== undefined) flag('missing-field', 'a reply-ack goes with a message ID');
+    if (replyAck !== undefined) {
+      // A reply-ack wrong on its own is wrong whatever else is given.
+      if (!REPLY_ACK.test(replyAck)) flag('invalid-message-id', 'a reply-ack is 0-5 letters or digits');
+      flag('missing-field', 'a reply-ack goes with a message ID');
+    }
     return '';
   }
   if (!MESSAGE_ID.test(id)) flag('invalid-message-id', 'a message ID is 1-5 letters or digits');
@@ -124,7 +128,8 @@ export function encodeTelemetryBits(d: TelemetryBits): string {
 }
 
 export function encodeDirectedQuery(d: DirectedQuery): string {
-  if (!/^(?:[A-Z]+|PING\?)$/.test(d.queryType)) flag('invalid-code', 'a query type is upper-case letters');
+  if (d.queryType === '') flag('missing-field', 'a query needs a type');
+  else if (!/^(?:[A-Z]+|PING\?)$/.test(d.queryType)) flag('invalid-code', 'a query type is upper-case letters');
   let out = `:${addressee(d.addressee)}:?${d.queryType}`;
   if (d.target !== undefined) {
     if (!/^[A-Za-z0-9-]{1,9}$/.test(d.target)) flag('invalid-addressee', 'a query target is one callsign');
@@ -213,7 +218,9 @@ export function encodeMaidenhead(d: MaidenheadBeacon): string {
 }
 
 export function encodeQuery(d: Query): string {
-  if (!/^[A-Z]+$/.test(d.queryType)) flag('invalid-code', 'a query type is upper-case letters');
+  // A query with no type is missing it (vectors case encode/query-without-a-type-and-radius-too-big).
+  if (d.queryType === '') flag('missing-field', 'a query needs a type');
+  else if (!/^[A-Z]+$/.test(d.queryType)) flag('invalid-code', 'a query type is upper-case letters');
   let out = `?${d.queryType}?`;
   if (d.footprint) {
     const f = d.footprint;

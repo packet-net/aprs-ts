@@ -253,6 +253,10 @@ function lostKeys(a, b, path, out) {
   } else if (a && typeof a === 'object') {
     for (const k of Object.keys(a)) {
       const p = path ? `${path}.${k}` : k;
+      // An ack or reject with a message ID of its own, and an empty list (no analog values, no
+      // capabilities), are data the encoder refuses, not data aprs-ts lacks.
+      if (k === 'message_id' && (a.type === 'ack' || a.type === 'reject')) continue;
+      if (Array.isArray(a[k]) && a[k].length === 0) continue;
       if (!b || typeof b !== 'object' || !(k in b)) out.push(p);
       else lostKeys(a[k], b[k], p, out);
     }
@@ -270,10 +274,7 @@ function encodeRecord(n, line) {
     throw e;
   }
   // Anything the data form holds that aprs-ts's data does not is unsupported, not silently dropped.
-  // An ack or reject with a message ID of its own, and a capabilities report with no items, are
-  // data the encoder refuses, not data aprs-ts lacks.
-  const refusable = (k) => (k === 'message_id' && (data.type === 'ack' || data.type === 'reject')) || (k === 'capabilities' && data.type === 'capabilities');
-  const lost = lostKeys(data, toNeutralData(own), '', []).filter((k) => !refusable(k));
+  const lost = lostKeys(data, toNeutralData(own), '', []);
   if (lost.length > 0) return { n, result: 'unsupported', reason: `aprs-ts data has no ${lost.join(', ')}` };
   let encoded;
   try {
