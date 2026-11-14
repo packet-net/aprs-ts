@@ -409,10 +409,15 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
   if (loc) {
     locator = loc[1]!.toUpperCase();
     text = text.slice(loc[0].length);
-    if (text.length > 0) {
+    // A PHG or RNG straight after the locator means its space is missing, whatever follows it (a
+    // space after the extension, or an altitude, base-91 telemetry or !DAO! lifted out of the text).
+    if (spacelessExtension) {
+      if (text[0] === ' ') text = text.slice(1);
+      ctx.tolerate('missing-space-after-locator');
+    } else if (text.length > 0) {
       if (text[0] === ' ') text = text.slice(1);
       else ctx.tolerate('missing-space-after-locator');
-    } else if (spacelessExtension) ctx.tolerate('missing-space-after-locator');
+    }
   }
   // A PHG or RNG is straight after the type code only where it is so as sent: one that reaches
   // there once a later altitude is lifted is late (vectors mic-e/an-rng-reached-only-by-lifting-an-altitude-is-late).
