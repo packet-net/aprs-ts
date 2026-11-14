@@ -95,7 +95,7 @@ function digitsMode(f: PositionedFields): DigitsMode {
 
 function blank(text: string, positions: readonly number[], ambiguity: number): string {
   const chars = text.split('');
-  for (let k = 0; k < ambiguity; k++) chars[positions[positions.length - 1 - k]!] = ' ';
+  for (let k = 0; k < Math.min(ambiguity, positions.length); k++) chars[positions[positions.length - 1 - k]!] = ' ';
   return chars.join('');
 }
 
@@ -103,8 +103,10 @@ function blank(text: string, positions: readonly number[], ambiguity: number): s
 function uncompressedPosition(f: PositionedFields): { text: string; latExtra: number; lonExtra: number } {
   if (!(f.latitude >= -90 && f.latitude <= 90)) flag(numberFault(f.latitude), `latitude ${f.latitude} is out of range`);
   if (!(f.longitude >= -180 && f.longitude <= 180)) flag(numberFault(f.longitude), `longitude ${f.longitude} is out of range`);
-  const ambiguity = f.ambiguity ?? 0;
-  if (!Number.isInteger(ambiguity) || ambiguity < 0 || ambiguity > 4) flag(numberFault(ambiguity), 'ambiguity is 0-4 digits');
+  const given = f.ambiguity ?? 0;
+  // A level outside 0-4 is refused; the position is written with none so the rest can be checked.
+  const ambiguity = Number.isInteger(given) && given >= 0 && given <= 4 ? given : 0;
+  if (ambiguity !== given) flag(numberFault(given), 'ambiguity is 0-4 digits');
   checkSymbol(f.symbol);
   const mode = digitsMode(f);
   const lat = digitsOf(f.latitude, mode, ambiguity);
@@ -149,7 +151,9 @@ function compressedPosition(
 ): { text: string; latExtra: number; lonExtra: number } {
   if (!(f.latitude >= -90 && f.latitude <= 90)) flag(numberFault(f.latitude), `latitude ${f.latitude} is out of range`);
   if (!(f.longitude >= -180 && f.longitude <= 180)) flag(numberFault(f.longitude), `longitude ${f.longitude} is out of range`);
-  if ((f.ambiguity ?? 0) !== 0) flag('field-not-allowed', 'a compressed position cannot be ambiguous');
+  // NaN or an infinity is not-a-number at every check that catches it, this one included.
+  if (f.ambiguity !== undefined && !Number.isFinite(f.ambiguity)) flag('not-a-number', 'ambiguity is not a number');
+  else if ((f.ambiguity ?? 0) !== 0) flag('field-not-allowed', 'a compressed position cannot be ambiguous');
   checkSymbol(f.symbol);
   let table = f.symbol.table;
   if (table >= '0' && table <= '9') table = String.fromCharCode(table.charCodeAt(0) + 49); // 0-9 -> a-j
@@ -191,7 +195,8 @@ function compressedDirection(degrees: number): string {
  * rulings, G3).
  */
 function compressedSpeed(knots: number, what: string): string {
-  if (!(knots > -1)) flag(numberFault(knots), `${what} has no compressed form`);
+  if (!Number.isFinite(knots)) flag('not-a-number', `${what} is not a number`);
+  else if (!(knots > -1)) flag(numberFault(knots), `${what} has no compressed form`);
   const s = nearest(Math.log(knots + 1) / Math.log(1.08));
   if (s < 0) flag('value-out-of-range', `${what} is negative`);
   if (s > 90) flag('value-out-of-range', `${what} is too high for the compressed format`);
@@ -203,7 +208,8 @@ function compressedSpeed(knots: number, what: string): string {
  * that s is below 0, so 1.95 miles is 2 and 1.9 is refused (vectors rulings, G3).
  */
 function compressedRange(miles: number): string {
-  if (!(miles > 0)) flag(numberFault(miles), 'a compressed range is at least 2 miles');
+  if (!Number.isFinite(miles)) flag('not-a-number', 'range is not a number');
+  else if (!(miles > 0)) flag(numberFault(miles), 'a compressed range is at least 2 miles');
   const s = nearest(Math.log(miles / 2) / Math.log(1.08));
   if (s < 0) flag('value-out-of-range', 'a compressed range is at least 2 miles');
   if (s > 90) flag('value-out-of-range', 'range is out of range for the compressed format');
@@ -289,7 +295,8 @@ export function frequencyText(f: VoiceFrequency): string {
 }
 
 export function telemetryText(t: CommentTelemetry): string {
-  if (t.analog.length < 1 || t.analog.length > 5) flag('too-long', 'comment telemetry has 1-5 analog values');
+  if (t.analog.length > 5) flag('too-long', 'comment telemetry has 1-5 analog values');
+  else if (t.analog.length < 1) flag('malformed', 'comment telemetry has 1-5 analog values');
   if (t.digital !== undefined && t.analog.length !== 5) flag('malformed', 'comment telemetry bits come after all five analog values');
   const v = (n: number, what: string): string => base91(whole(n, 0, 8280, what), 2);
   let out = '|' + v(t.sequence, 'telemetry sequence');
@@ -309,7 +316,7 @@ function daoText(f: PositionedFields, latExtra: number, lonExtra: number, applie
   if (!applied) flag('field-not-allowed', 'a !DAO! adds precision to a position that is ambiguous');
   if (/^[0-9]$/.test(datum)) {
     // A local datum digit has no case to give a precision, so it only goes with spaces.
-    if (dao.precision !== 'none') flag('field-not-allowed', 'a !DAO! datum digit carries no added precision');
+    if (dao.precision !== 'none') flag('invalid-code', 'a !DAO! datum digit carries no added precision');
     return `!${datum}  !`;
   }
   if (!/^[A-Za-z]$/.test(datum)) flag('invalid-code', 'the !DAO! datum is a letter or a digit');
@@ -412,6 +419,55 @@ function hasExtension(f: PositionedFields): string[] {
   return found;
 }
 
+/** The data extension texts given: each is checked on its own, whether or not it is the one written. */
+interface ExtensionTexts {
+  phg?: string;
+  rng?: string;
+  dfs?: string;
+  area?: string;
+}
+
+/**
+ * Writes every data extension given, so each gets its own checks even when it conflicts with
+ * another: a field whose place exists but is wanted twice keeps its own checks (vectors
+ * interpretations.md, which refusal a record with two faults gets).
+ */
+function extensionTexts(f: Pick<PositionedFields, 'phg' | 'rangeMiles' | 'dfs' | 'area'>): ExtensionTexts {
+  const out: ExtensionTexts = {};
+  if (f.phg) {
+    const p = f.phg;
+    out.phg = `PHG${whole(p.power, 0, 9, 'power code')}${heightChar(p.height)}${whole(p.gain, 0, 9, 'gain code')}${whole(p.directivity, 0, 9, 'directivity code')}`;
+    if (p.beaconsPerHour !== undefined) out.phg += rateChar(p.beaconsPerHour) + '/';
+  }
+  if (f.rangeMiles !== undefined) out.rng = 'RNG' + pad(whole(f.rangeMiles, 0, 9999, 'range'), 4);
+  if (f.dfs) {
+    const d = f.dfs;
+    out.dfs = `DFS${whole(d.strength, 0, 9, 'strength')}${heightChar(d.height)}${whole(d.gain, 0, 9, 'gain code')}${whole(d.directivity, 0, 9, 'directivity code')}`;
+  }
+  if (f.area) {
+    const a = f.area;
+    const shape = AREA_SHAPES.indexOf(a.shape);
+    const color = AREA_COLORS.indexOf(a.color);
+    if (shape < 0 || color < 0) flag('invalid-code', 'unknown area shape or colour');
+    const c = color < 10 ? `/${color}` : String(color);
+    out.area = `${shape}${pad(whole(a.latOffset, 0, 99, 'area offset'), 2)}${c}${pad(whole(a.lonOffset, 0, 99, 'area offset'), 2)}`;
+  }
+  return out;
+}
+
+/** The course and speed with any DF bearing or storm data that extends it, uncompressed. */
+function courseText(f: PositionedFields): string {
+  // DF or storm data with no course and speed follows `.../...`, which reads back as unknown
+  // (vectors rulings, F8).
+  let out = courseSpeed(f.courseDegrees, f.speedKnots);
+  if (f.dfBearing) {
+    const b = f.dfBearing;
+    out += `/${pad(whole(b.bearingDegrees, 0, 360, 'bearing'), 3)}/${whole(b.number, 0, 9, 'N')}${whole(b.range, 0, 9, 'R')}${whole(b.quality, 0, 9, 'Q')}`;
+  }
+  if (f.storm) out += stormText(f.storm);
+  return out;
+}
+
 /**
  * How the comment is joined on: `plain` (after a space when it follows a frequency), `joined`
  * (straight after a frequency, with no space), `delimited` (after a `/`) or `spaced` (after a
@@ -486,32 +542,9 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
     latExtra = pos.latExtra;
     lonExtra = pos.lonExtra;
     daoApplied = (f.ambiguity ?? 0) === 0;
-    if (hasCourse) {
-      // DF or storm data with no course and speed follows `.../...`, which reads back as unknown
-      // (vectors rulings, F8).
-      out += courseSpeed(f.courseDegrees, f.speedKnots);
-      if (f.dfBearing) {
-        const b = f.dfBearing;
-        out += `/${pad(whole(b.bearingDegrees, 0, 360, 'bearing'), 3)}/${whole(b.number, 0, 9, 'N')}${whole(b.range, 0, 9, 'R')}${whole(b.quality, 0, 9, 'Q')}`;
-      }
-      if (f.storm) out += stormText(f.storm);
-    } else if (f.phg) {
-      const p = f.phg;
-      out += `PHG${whole(p.power, 0, 9, 'power code')}${heightChar(p.height)}${whole(p.gain, 0, 9, 'gain code')}${whole(p.directivity, 0, 9, 'directivity code')}`;
-      if (p.beaconsPerHour !== undefined) out += rateChar(p.beaconsPerHour) + '/';
-    } else if (f.rangeMiles !== undefined) {
-      out += 'RNG' + pad(whole(f.rangeMiles, 0, 9999, 'range'), 4);
-    } else if (f.dfs) {
-      const d = f.dfs;
-      out += `DFS${whole(d.strength, 0, 9, 'strength')}${heightChar(d.height)}${whole(d.gain, 0, 9, 'gain code')}${whole(d.directivity, 0, 9, 'directivity code')}`;
-    } else if (f.area) {
-      const a = f.area;
-      const shape = AREA_SHAPES.indexOf(a.shape);
-      const color = AREA_COLORS.indexOf(a.color);
-      if (shape < 0 || color < 0) flag('invalid-code', 'unknown area shape or colour');
-      const c = color < 10 ? `/${color}` : String(color);
-      out += `${shape}${pad(whole(a.latOffset, 0, 99, 'area offset'), 2)}${c}${pad(whole(a.lonOffset, 0, 99, 'area offset'), 2)}`;
-    }
+    const course = hasCourse ? courseText(f) : undefined;
+    const e = extensionTexts(f);
+    out += course ?? e.phg ?? e.rng ?? e.dfs ?? e.area ?? '';
   }
   // After the data extension: the frequency with its fields, first, where radios read it (APRS12c
   // ch. 18); the signpost or corridor braces; the altitude, unless the compressed cs bytes carry it
@@ -532,11 +565,15 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
     braces = `{${whole(f.area.corridorWidthMiles, 0, 999, 'corridor width')}}`;
   }
   text += braces;
-  // With a GGA compression type the altitude belongs in the cs bytes, whose limit is its own; if
-  // a course or range wants them too, that conflict is the fault, not the /A= limit.
+  // With a GGA compression type the altitude belongs in the cs bytes; a course or range that wants
+  // them too is an extension conflict.
   const csWanted = compression?.source === 'gga' && (hasCourse || f.rangeMiles !== undefined);
-  const fitsCs = f.altitudeFeet !== undefined && Number.isFinite(f.altitudeFeet) && (f.altitudeFeet <= 1 || nearest(Math.log(f.altitudeFeet) / Math.log(1.002)) <= 91 * 91 - 1);
-  if (f.altitudeFeet !== undefined && !altitudeInCs && !(csWanted && fitsCs)) text += altitudeText(f.altitudeFeet);
+  // The altitude is wanted twice there, so it keeps its own checks: the nearest cs value, and the
+  // /A= that wins when the cs bytes do not hold it exactly.
+  if (f.altitudeFeet !== undefined && !altitudeInCs) {
+    if (!csWanted) text += altitudeText(f.altitudeFeet);
+    else if (!ggaAltitude(f.altitudeFeet).exact) altitudeText(f.altitudeFeet);
+  }
   const comment = f.comment ?? '';
   if (comment.length > 0 || mode === 'delimited') {
     // After a frequency (and anything after it) the free text follows a space, unless that would
@@ -580,6 +617,11 @@ function weatherBody(f: PositionedFields): Body {
   if (f.compressed) {
     compression = f.compression;
     let cs: string | undefined;
+    // A course and speed want the cs bytes that hold the wind or a GGA altitude: they conflict,
+    // and keep their own checks in the cs form.
+    if (f.courseDegrees !== undefined) whole(f.courseDegrees, 1, 360, 'course', 'value-out-of-range', 0);
+    if (f.speedKnots !== undefined) compressedSpeed(f.speedKnots, 'speed');
+    if (f.altitudeFeet !== undefined && compression?.source === 'gga') ggaAltitude(f.altitudeFeet);
     if (w.windDirectionDegrees !== undefined || w.windSpeedMph !== undefined) {
       if (w.windDirectionDegrees === undefined || w.windSpeedMph === undefined) flag('missing-field', 'compressed wind needs both direction and speed');
       const windDirection = w.windDirectionDegrees ?? 0;
@@ -616,6 +658,9 @@ function weatherBody(f: PositionedFields): Body {
   } else {
     if (f.compression) flag('field-not-allowed', 'an uncompressed position has no compression type');
     if (f.altitudeFeet !== undefined) flag('field-not-allowed', 'a weather report has no altitude in its comment');
+    // The wind holds the data extension: what else wants it conflicts, and keeps its own checks.
+    if (f.courseDegrees !== undefined || f.speedKnots !== undefined || f.dfBearing || f.storm) courseText(f);
+    extensionTexts(f);
     const pos = uncompressedPosition(f);
     out += pos.text;
     latExtra = pos.latExtra;
@@ -624,7 +669,8 @@ function weatherBody(f: PositionedFields): Body {
     out += courseSpeed(w.windDirectionDegrees, w.windSpeedMph, 'wind direction');
     out += weatherFields(w, true);
   }
-  if (f.telemetry) out += telemetryText(f.telemetry);
+  // Comment telemetry has no place in a weather report (field-not-allowed, flagged above), so its own
+  // checks do not run.
   if (f.dao) out += daoText(f, latExtra, lonExtra, daoApplied);
   const body: Body = { text: out };
   if (compression) body.compression = compression;
@@ -647,19 +693,23 @@ export function encodePositionReport(d: PositionReport, mode: CommentMode): Body
 }
 
 export function encodeObject(d: ObjectReport, mode: CommentMode): Body {
-  if (!/^[\x20-\x7e]{1,9}$/.test(d.name)) flag('invalid-name', 'an object name is 1-9 printable ASCII characters');
-  if (d.name.endsWith(' ')) flag('padding-space', 'an object name cannot end in a space, which reads as padding');
+  // Data built by hand, not checked by the type system, may have no name at all: an empty name.
+  const name = typeof d.name === 'string' ? d.name : '';
+  if (!/^[\x20-\x7e]{1,9}$/.test(name)) flag('invalid-name', 'an object name is 1-9 printable ASCII characters');
+  if (name.endsWith(' ')) flag('padding-space', 'an object name cannot end in a space, which reads as padding');
   if (!d.timestamp) flag('missing-field', 'an object report always has a timestamp');
   const ts = d.timestamp ? timestamp7(d.timestamp) : '';
   const body = positionedBody(d, mode);
-  return { ...body, text: ';' + d.name.padEnd(9, ' ') + (d.killed ? '_' : '*') + ts + body.text };
+  return { ...body, text: ';' + name.padEnd(9, ' ') + (d.killed ? '_' : '*') + ts + body.text };
 }
 
 export function encodeItem(d: ItemReport, mode: CommentMode): Body {
-  if (!/^[\x20-\x7e]{3,9}$/.test(d.name)) flag('invalid-name', 'an item name is 3-9 printable ASCII characters');
-  if (/[!_]/.test(d.name)) flag('invalid-name', 'an item name cannot contain ! or _');
+  // Data built by hand, not checked by the type system, may have no name at all: an empty name.
+  const name = typeof d.name === 'string' ? d.name : '';
+  if (!/^[\x20-\x7e]{3,9}$/.test(name)) flag('invalid-name', 'an item name is 3-9 printable ASCII characters');
+  if (/[!_]/.test(name)) flag('invalid-name', 'an item name cannot contain ! or _');
   const body = positionedBody(d, mode);
-  return { ...body, text: ')' + d.name + (d.killed ? '_' : '!') + body.text };
+  return { ...body, text: ')' + name + (d.killed ? '_' : '!') + body.text };
 }
 
 // ---- Mic-E (APRS12c ch. 10)
@@ -685,7 +735,8 @@ function micEDestination(d: MicEReport, lat: Digits, lonDegrees: number): string
     bits = CUSTOM[message]!;
     custom = true;
   } else flag('invalid-code', `the Mic-E message ${message} has no encoding`);
-  const ambiguity = d.ambiguity ?? 0;
+  const given = d.ambiguity ?? 0;
+  const ambiguity = Number.isInteger(given) && given >= 0 && given <= 4 ? given : 0;
   const digits = pad(lat.degrees, 2) + pad(lat.hundredths, 4);
   let out = '';
   for (let k = 0; k < 6; k++) {
@@ -707,6 +758,8 @@ function micEDestination(d: MicEReport, lat: Digits, lonDegrees: number): string
 }
 
 export function micEAltitude(feet: number): string | undefined {
+  // NaN or an infinity has no Mic-E bytes; the /A= check names it not-a-number.
+  if (!Number.isFinite(feet)) return undefined;
   const metres = nearest(feet * METRES_PER_FOOT);
   if (Math.abs(metres / METRES_PER_FOOT - feet) > 1e-6) return undefined;
   const v = metres + 10000;
@@ -722,8 +775,10 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   checkSymbol(d.symbol);
   if (d.weather) flag('field-not-allowed', 'a Mic-E report has no weather data');
   if (d.dfBearing || d.storm || d.area || d.signpost !== undefined) flag('field-not-allowed', 'a Mic-E report cannot carry that data');
-  const ambiguity = d.ambiguity ?? 0;
-  if (!Number.isInteger(ambiguity) || ambiguity < 0 || ambiguity > 4) flag(numberFault(ambiguity), 'ambiguity is 0-4 digits');
+  const given = d.ambiguity ?? 0;
+  // A level outside 0-4 is refused; the position is written with none so the rest can be checked.
+  const ambiguity = Number.isInteger(given) && given >= 0 && given <= 4 ? given : 0;
+  if (ambiguity !== given) flag(numberFault(given), 'ambiguity is 0-4 digits');
   const digits = digitsMode(d);
   const lat = digitsOf(d.latitude, digits, ambiguity);
   const lon = digitsOf(d.longitude, digits, ambiguity);
@@ -788,16 +843,10 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   let after = '';
   const exts = [d.phg ? 1 : 0, d.rangeMiles !== undefined ? 1 : 0, d.dfs ? 1 : 0].reduce((a, b) => a + b, 0);
   if (exts > 1) flag('extension-conflict', 'only one data extension can follow');
-  if (d.phg) {
-    const p = d.phg;
-    after += `PHG${whole(p.power, 0, 9, 'power code')}${heightChar(p.height)}${whole(p.gain, 0, 9, 'gain code')}${whole(p.directivity, 0, 9, 'directivity code')}`;
-    if (p.beaconsPerHour !== undefined) after += rateChar(p.beaconsPerHour) + '/';
-  } else if (d.rangeMiles !== undefined) {
-    after += 'RNG' + pad(whole(d.rangeMiles, 0, 9999, 'range'), 4);
-  } else if (d.dfs) {
-    const x = d.dfs;
-    after += `DFS${whole(x.strength, 0, 9, 'strength')}${heightChar(x.height)}${whole(x.gain, 0, 9, 'gain code')}${whole(x.directivity, 0, 9, 'directivity code')}`;
-  }
+  // Mic-E has no place for an area, so its checks do not run here.
+  const { area: _area, ...withoutArea } = d;
+  const e = extensionTexts(withoutArea);
+  after += e.phg ?? e.rng ?? e.dfs ?? '';
   if (altitudeInComment !== undefined) after += altitudeText(altitudeInComment);
   let rest = '';
   if (d.frequency) rest += (exts > 0 && altitudeInComment === undefined && !after.endsWith('/') ? '/' : '') + frequencyText(d.frequency);

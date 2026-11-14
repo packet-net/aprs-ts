@@ -32,6 +32,7 @@ import {
   encodeThirdParty,
   encodeUserDefined,
 } from './other.js';
+import { checkShape, guarded, pendingShapeFaults } from './shape.js';
 import { DEFAULT_COMPRESSION, encodeItem, encodeMicE, encodeObject, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
 
 export { AprsEncodeError, DEFAULT_DESTINATION } from './common.js';
@@ -69,6 +70,8 @@ const INNER_HEADER_CODES: ReadonlySet<string> = new Set([
 ]);
 
 function attemptOnce(data: AprsData, mode: CommentMode): Attempt {
+  // A required field left out or of the wrong kind, held until the rest is checked.
+  for (const e of pendingShapeFaults(data)) flag(e.code, e.message);
   const inner = (data as { weather?: unknown }).weather;
   for (const o of [data, inner]) {
     const why = typeof o === 'object' && o !== null ? givenTwiceReason(o) : undefined;
@@ -224,7 +227,12 @@ function check(data: AprsData, a: Attempt): Problem[] {
   }
   // An NMEA sentence is written as it is, so everything read from it must be what the data says.
   const shape: Problem[] = [];
-  shapeDifferences(withoutInnerInfo(toNeutralData(decoded.data)), withoutInnerInfo(toNeutralData(expected(data, a))), '', shape, data.type === 'nmea');
+  const got = withoutInnerInfo(toNeutralData(decoded.data));
+  let want = withoutInnerInfo(toNeutralData(expected(data, a)));
+  // NMEA data is its sentence: a field left out is the one the sentence gives (vectors
+  // interpretations.md, NMEA data is its sentence).
+  if (data.type === 'nmea') want = { ...got, ...want };
+  shapeDifferences(got, want, '', shape, data.type === 'nmea');
   // Whatever differs in a sentence read back is a field that disagrees with it.
   for (const p of shape) problems.push(data.type === 'nmea' ? problem('invalid-nmea', p.text) : p);
   return problems;
@@ -249,6 +257,10 @@ function withoutInnerInfo(n: Record<string, unknown>): Record<string, unknown> {
  * Throws `AprsEncodeError`, with the reason, for anything the spec does not allow.
  */
 export function encodeInformation(data: AprsData): EncodedInformation {
+  return guarded(() => encodeShaped(checkShape(data)));
+}
+
+function encodeShaped(data: AprsData): EncodedInformation {
   const first = attempt(data, 'plain');
   let problems = check(data, first);
   let chosen = first;
@@ -288,6 +300,11 @@ function pathText(entry: string | PathEntry): string {
   return typeof entry === 'string' ? entry : entry.used ? `${entry.address}*` : entry.address;
 }
 
+/** The destination to check before the data is encoded: a Mic-E one is computed, and always valid. */
+function givenDestination(p: PacketToEncode): string {
+  return (p.data as { type?: unknown } | undefined)?.type === 'mic-e' ? DEFAULT_DESTINATION : (p.destination ?? DEFAULT_DESTINATION);
+}
+
 function resolve(p: PacketToEncode): { destination: string; information: Uint8Array; path: string[] } {
   const encoded = encodeInformation(p.data);
   const destination = encoded.destination ?? p.destination ?? DEFAULT_DESTINATION;
@@ -319,9 +336,13 @@ export function tnc2TextOf(bytes: Uint8Array): string {
 
 /** Encodes a packet as the bytes of a TNC2 / APRS-IS line (the information field as sent). */
 export function encodeTnc2Bytes(p: PacketToEncode): Uint8Array {
-  const r = resolve(p);
-  checkHeaderAddresses(p.source, r.destination, r.path);
-  return tnc2BytesOf(p.source, r.destination, r.path, r.information);
+  return guarded(() => {
+    // The header is written first, so its faults come before any in the data.
+    checkHeaderAddresses(p.source, givenDestination(p), (p.path ?? []).map(pathText));
+    const r = resolve(p);
+    checkHeaderAddresses(p.source, r.destination, r.path);
+    return tnc2BytesOf(p.source, r.destination, r.path, r.information);
+  });
 }
 
 /**
@@ -361,8 +382,12 @@ export function ax25Of(source: string, destination: string, path: readonly (stri
 
 /** Encodes a packet as an AX.25 UI frame in KISS form (no flags, no FCS). */
 export function encodeAx25(p: PacketToEncode): Uint8Array {
-  const r = resolve(p);
-  return ax25Of(p.source, r.destination, p.path ?? [], r.information);
+  return guarded(() => {
+    // The header is written first, so what AX.25 cannot carry comes before any fault in the data.
+    ax25Of(p.source, givenDestination(p), p.path ?? [], new Uint8Array(0));
+    const r = resolve(p);
+    return ax25Of(p.source, r.destination, p.path ?? [], r.information);
+  });
 }
 
 /** Wraps an AX.25 frame for a KISS TNC: FEND, a data command on `port`, escaping, FEND. */

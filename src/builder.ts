@@ -13,7 +13,7 @@
 // `build()` encodes the packet, so anything the spec does not allow is refused there, with an
 // `AprsEncodeError` that says why.
 
-import { DEFAULT_DESTINATION, markGivenTwice, nearest, numberFault, refuse } from './encode/common.js';
+import { AprsEncodeError, DEFAULT_DESTINATION, firstRefusal, markGivenTwice, nearest, numberFault, refuse } from './encode/common.js';
 import { ax25Of, checkHeaderAddresses, encodeInformation, tnc2BytesOf, tnc2TextOf, wrapKiss } from './encode/index.js';
 import { symbolOf } from './symbols.js';
 import type {
@@ -69,10 +69,14 @@ function pathText(entry: PathEntry): string {
 
 /** Encodes the data and checks the header's addresses, so a `BuiltPacket` can always be written. */
 function built(header: Header, data: AprsData): BuiltPacket {
-  const encoded = encodeInformation(data);
-  const destination = encoded.destination ?? header.destination ?? DEFAULT_DESTINATION;
   const path = header.path.map((e) => Object.freeze({ ...e }));
   const text = path.map(pathText);
+  // The header is written first, so its faults come before any in the data (vectors README,
+  // Refusal reasons); a Mic-E destination is computed, and always a valid address.
+  const given = data.type === 'mic-e' ? DEFAULT_DESTINATION : (header.destination ?? DEFAULT_DESTINATION);
+  checkHeaderAddresses(header.source, given, text);
+  const encoded = encodeChecked(data);
+  const destination = encoded.destination ?? header.destination ?? DEFAULT_DESTINATION;
   checkHeaderAddresses(header.source, destination, text);
   const information = encoded.information;
   const frame = (): Uint8Array => ax25Of(header.source, destination, path, information);
@@ -127,7 +131,36 @@ function weatherOf(input: WeatherInput): Weather {
   convert(rain1hMm, 'rain1hIn', (mm) => mm / MM_PER_INCH);
   convert(rain24hMm, 'rain24hIn', (mm) => mm / MM_PER_INCH);
   convert(rainMidnightMm, 'rainMidnightIn', (mm) => mm / MM_PER_INCH);
-  return twice === undefined ? w : markGivenTwice(w, twice);
+  if (twice === undefined) return w;
+  // The same weather with the values given in the APRS units, so they are checked too.
+  const marked = markGivenTwice(w, twice);
+  aprsUnits.set(marked, rest as Weather);
+  return marked;
+}
+
+/** For weather given a value in two units, the weather with the APRS-unit values instead. */
+const aprsUnits = new WeakMap<object, Weather>();
+
+/**
+ * Encodes data a builder made from one input that gave a value in two units: every value is
+ * checked on its own, so the refusal is the first code in the order among both encodings and
+ * `value-given-twice` (vectors README, Builder rules). Other data is encoded as it is.
+ */
+function encodeChecked(data: AprsData): ReturnType<typeof encodeInformation> {
+  const weather = (data as { weather?: object }).weather;
+  const other = weather === undefined ? undefined : aprsUnits.get(weather);
+  if (other === undefined) return encodeInformation(data);
+  const faults: AprsEncodeError[] = [];
+  for (const d of [data, { ...data, weather: other } as AprsData]) {
+    try {
+      encodeInformation(d);
+    } catch (e) {
+      if (!(e instanceof AprsEncodeError)) throw e;
+      faults.push(e);
+    }
+  }
+  faults.push(new AprsEncodeError(`a weather value is given in two units`, 'value-given-twice'));
+  throw firstRefusal(faults);
 }
 
 function asSymbol(symbol: AprsSymbol | string): AprsSymbol {
@@ -349,7 +382,6 @@ abstract class PositionedBuilder<Self> {
   /** Altitude, feet, sent as a `/A=` in whole feet (rounded to the nearest, halves away from zero). */
   altitudeFeet(feet: number): Self {
     this.fields.altitudeFeet = feet;
-    if (this.altitudeUnit === 'metres') this.altitudeTwice = true;
     this.altitudeUnit = 'feet';
     return this.self();
   }
@@ -360,20 +392,12 @@ abstract class PositionedBuilder<Self> {
    */
   altitudeM(metres: number): Self {
     this.fields.altitudeFeet = metres / 0.3048;
-    if (this.altitudeUnit === 'feet') this.altitudeTwice = true;
     this.altitudeUnit = 'metres';
     return this.self();
   }
 
-  /** The unit the altitude was given in. */
+  /** The unit the altitude was last given in: a setter replaces the altitude whatever its unit (vectors README, Builder). */
   protected altitudeUnit: 'feet' | 'metres' | undefined;
-
-  private altitudeTwice = false;
-
-  /** An altitude given in feet and in metres is refused when the report is encoded, as a weather value in two units is. */
-  protected markTwice<T extends object>(data: T): T {
-    return this.altitudeTwice ? markGivenTwice(data, 'the altitude is given in two units') : data;
-  }
 
   /** Free text. */
   comment(text: string): Self {
@@ -466,7 +490,7 @@ export class PositionBuilder extends ReportBuilder<PositionBuilder> {
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.timestampValue) data.timestamp = this.timestampValue;
     if (this.messagingValue) data.messaging = true;
-    return built(this.header, this.markTwice(data));
+    return built(this.header, data);
   }
 
   toTnc2(): string {
@@ -513,7 +537,7 @@ export class ObjectBuilder extends ReportBuilder<ObjectBuilder> {
     };
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.killedValue) data.killed = true;
-    return built(this.header, this.markTwice(data));
+    return built(this.header, data);
   }
 
   toTnc2(): string {
@@ -548,7 +572,7 @@ export class ItemBuilder extends ReportBuilder<ItemBuilder> {
     const data: Mutable<Extract<AprsData, { type: 'item' }>> = { type: 'item', name: this.name, ...this.fields };
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.killedValue) data.killed = true;
-    return built(this.header, this.markTwice(data));
+    return built(this.header, data);
   }
 
   toTnc2(): string {
@@ -601,7 +625,7 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
     if (this.typeCodeValue !== undefined) data.typeCode = this.typeCodeValue;
     if (this.locatorValue !== undefined) data.locator = this.locatorValue;
     if (this.oldValue) data.oldData = true;
-    return built(this.header, this.markTwice(data));
+    return built(this.header, data);
   }
 
   toTnc2(): string {

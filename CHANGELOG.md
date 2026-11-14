@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+The round 3 rulings of the conformance vectors (aprs-vectors#24), for 1.1.0. The vectors runner now checks the refusal code each case names, not only that the encoder refused.
+
+Decoding. Third-party packets nest at most four deep: a fifth `}` is not read, and the packet it starts is `unrecognized` (`malformed`) with `error:invalid-third-party`, so a line of thousands of nested headers costs no more than five. An AX.25 address is upper-case letters and digits: a lower-case letter is still tolerated (`invalid-ax25-address-characters`), but any other character, a space before the last one included, is `invalid-address`, and a call of spaces only is read as an empty TNC2 address is (an empty source is `invalid-address`, an empty destination `empty-destination`, an empty digipeater `empty-path-entry` and left out of the path). In a weather report a `!DAO!` on an ambiguous position is met before the comment text left over, so a strict decoder rejects such a packet by `dao-with-ambiguity`, not `weather-comment`.
+
+Encoding: which refusal code. Base-91 telemetry with no analog values is `malformed` (more than five is still `too-long`). A `!DAO!` digit datum with added precision is `invalid-code`. NMEA data is its sentence: a field left out is taken from the sentence and the sentence is written, and a comment after a sentence with no checksum is `invalid-nmea`. A third-party path entry before a used one that is not marked used is `invalid-third-party-header`. A field whose place exists but is wanted twice keeps its own checks before the conflict is named: every data extension given (a PHG digit of 10 beside a course is `value-out-of-range`), those on an uncompressed weather report, a course and speed on a compressed weather report, and a GGA altitude whose cs bytes a course or range also wants. A reply-ack that is wrong on its own is `invalid-message-id` even with no message ID. A query or directed query with no type is `invalid-code`, since absent text is empty text. Base-91 telemetry on a weather report is `field-not-allowed` and its own checks do not run. An object or item built by hand with no name is refused as `invalid-name` instead of throwing a `TypeError`.
+
+Encoding: data built by hand. The encoder checks the shape of what it is given before reading it, so no public encoding call (`encodeInformation`, `encodeTnc2`, `encodeTnc2Bytes`, `encodeAx25`, `packetToTnc2`, `packetToAx25` and the builders) throws anything but an `AprsEncodeError` on any object. Text a report always has is empty text when left out: a missing name is `invalid-name`, a missing addressee `invalid-addressee`, a missing query type `invalid-code` and a missing or unusable positioned symbol `invalid-symbol`. Any other required field left out is `missing-field`, and a field of the wrong kind is `malformed`; that refusal waits until the rest of the record is checked, so a fault earlier in the Refusal reasons order wins, except for a missing NMEA sentence or third-party packet, without which nothing is left to check. Third-party data nested more than four deep is refused as `invalid-third-party-header`, before any fault inside it; the chain is walked without recursion, in the encoder and in the neutral-form conversion, so a caller-built chain 10,000 deep is refused, not a stack overflow.
+
+The header comes first: a builder, `encodeTnc2`, `encodeTnc2Bytes` and `encodeAx25` check the source, destination and path before the data, so a bad source with an out-of-range course is `invalid-address` (or `ax25-cannot-carry`), not `value-out-of-range`.
+
+Builder. A setter replaces its quantity whatever unit it was given in, so on a kept builder the last altitude setter wins again (`.altitudeFeet(1000).altitudeM(100)` sends 328 feet). This reverses 1.0.1, where `.altitudeFeet()` and `.altitudeM()` together were refused with `value-given-twice`; that refusal is now only for one input that carries the same quantity in two units at once, such as a weather input with `temperatureF` and `temperatureC`.
+
+A weather input that gives one value in two units (`temperatureF` and `temperatureC`, say) has both values checked: the refusal is the first code in the order among both, the other faults and `value-given-twice`, which comes after `missing-field`, so an out-of-range value in either unit is `value-out-of-range`.
+
+NaN and infinities are `not-a-number` wherever a check catches them: a compressed speed, range or ambiguity, a Mic-E altitude, and an NMEA field beside its sentence. An ambiguity of infinity no longer hangs the encoder.
+
+The dump tool reads the `NaN`, `Infinity` and `-Infinity` tokens `generate.py --nonfinite` writes; builds a recipe giving one quantity in two units once with each unit and reports the first code among both results and `value-given-twice`, never `unsupported`; and gives a status recipe's `hms` or `mdhm` timestamp to the builder, which refuses it as `invalid-timestamp`.
+
+### Behaviour changes for 1.x callers
+
+- A lower-case locator in neutral or hand-built data (a status, a Mic-E report, a Maidenhead beacon) is refused as `malformed`; builders still upper-case it.
+- An AX.25 address with punctuation, a space inside it or a control character is now `invalid-address`, and the frame is not decoded; only lower case is tolerated.
+- Telemetry analog counts: too few is `malformed`, too many `too-long`.
+- Third-party packets nest at most four deep, decoding and encoding.
+- `.altitudeFeet()` then `.altitudeM()` on one builder is no longer refused; the last one wins.
+
 ## 1.0.1 (2026-11-12)
 
 Refusals carry a reason code. `AprsEncodeError` has a new read-only `code` property, a `RefusalCode` from the shared list of 26 in the conformance vectors' `codes.json` (`refusals`), so a program can tell why the encoder or a builder refused without reading the message. `RefusalCode`, `REFUSAL_CODES` and `REFUSAL_MEANINGS` are exported. Additive only: the error class, its message text and every signature are unchanged. `code` is `does-not-read-back` only where the library's own read-back check fails and no named rule applies. New codes may be added in later 1.x releases, so allow an unknown one. A builder given an altitude in both feet and metres now refuses it with `value-given-twice`, as it already did for a weather value in two units; the last setter used to win.

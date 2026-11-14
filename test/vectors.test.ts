@@ -78,7 +78,9 @@ function reencodeCheck(c: Case, lenient: Result): string[] {
     encoded = encodeInformation(packet.data);
   } catch (e) {
     if (e instanceof AprsEncodeError) {
-      return c.reencode === 'refused' ? [] : [`the encoder refused: ${e.message}`];
+      if (c.reencode !== 'refused') return [`the encoder refused: ${e.message}`];
+      const want = (c as { reencode_refusal?: string }).reencode_refusal;
+      return want === undefined || want === e.code ? [] : [`refused with ${e.code} (${e.message}), want ${want}`];
     }
     throw e;
   }
@@ -130,7 +132,11 @@ function encodeCheck(c: Case): string[] {
   try {
     encoded = encodeInformation(data);
   } catch (e) {
-    if (e instanceof AprsEncodeError) return c.expect.refused ? [] : [`the encoder refused: ${e.message}`];
+    if (e instanceof AprsEncodeError) {
+      if (!c.expect.refused) return [`the encoder refused: ${e.message}`];
+      const want = c.expect.refusal as string | undefined;
+      return want === undefined || want === e.code ? [] : [`refused with ${e.code} (${e.message}), want ${want}`];
+    }
     throw e;
   }
   if (c.expect.refused) return [`expected a refusal, wrote ${JSON.stringify(latin1(encoded.information))}`];

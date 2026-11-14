@@ -41,7 +41,11 @@ function addressee(a: string): string {
 
 function messageId(id: string | undefined, replyAck: string | undefined): string {
   if (id === undefined) {
-    if (replyAck !== undefined) flag('missing-field', 'a reply-ack goes with a message ID');
+    if (replyAck !== undefined) {
+      // A reply-ack wrong on its own is wrong whatever else is given.
+      if (!REPLY_ACK.test(replyAck)) flag('invalid-message-id', 'a reply-ack is 0-5 letters or digits');
+      flag('missing-field', 'a reply-ack goes with a message ID');
+    }
     return '';
   }
   if (!MESSAGE_ID.test(id)) flag('invalid-message-id', 'a message ID is 1-5 letters or digits');
@@ -124,6 +128,7 @@ export function encodeTelemetryBits(d: TelemetryBits): string {
 }
 
 export function encodeDirectedQuery(d: DirectedQuery): string {
+  // Absent text is empty text, so a query with no type has an invalid one (vectors interpretations.md).
   if (!/^(?:[A-Z]+|PING\?)$/.test(d.queryType)) flag('invalid-code', 'a query type is upper-case letters');
   let out = `:${addressee(d.addressee)}:?${d.queryType}`;
   if (d.target !== undefined) {
@@ -199,11 +204,13 @@ export function encodeRawWeather(d: RawWeather): string {
 }
 
 export function encodeNmea(d: NmeaSentence): string {
+  // A field given as NaN or an infinity is not-a-number, the check that compares it with the sentence included.
+  for (const v of [d.latitude, d.longitude, d.courseDegrees, d.speedKnots, d.altitudeM]) if (v !== undefined && !Number.isFinite(v)) flag('not-a-number', 'an NMEA field is not a number');
   const parts = splitNmea(d.sentence);
   if (!parts || parts.rest.length > 0) flag('invalid-nmea', 'not an NMEA 0183 sentence');
   else if (!parts.checksumOk) flag('invalid-nmea', "the NMEA sentence's checksum does not match");
   const comment = d.comment ?? '';
-  if (parts && comment.length > 0 && !parts.hasChecksum) flag('missing-field', 'a comment after an NMEA sentence needs the checksum that ends the sentence');
+  if (parts && comment.length > 0 && !parts.hasChecksum) flag('invalid-nmea', 'a comment after an NMEA sentence needs the checksum that ends the sentence');
   return `$${d.sentence}${freeText(comment, 'the comment')}`;
 }
 
@@ -213,6 +220,7 @@ export function encodeMaidenhead(d: MaidenheadBeacon): string {
 }
 
 export function encodeQuery(d: Query): string {
+  // Absent text is empty text, so a query with no type has an invalid one (vectors interpretations.md).
   if (!/^[A-Z]+$/.test(d.queryType)) flag('invalid-code', 'a query type is upper-case letters');
   let out = `?${d.queryType}?`;
   if (d.footprint) {
@@ -277,6 +285,9 @@ export function checkThirdPartyHeader(d: ThirdParty): void {
   if (!/^[\x20-\x39\x3b-\x3d\x3f-\x7e]{1,9}$/.test(p.source)) flag('invalid-third-party-header', 'a third-party source is 1-9 printable ASCII characters other than > and :');
   if (!isAprsIsAddress(p.destination)) flag('invalid-third-party-header', 'the third-party destination is not a valid address');
   for (const e of p.path) if (!isAprsIsAddress(e.address)) flag('invalid-third-party-header', `the third-party path entry ${JSON.stringify(e.address)} is not a valid address`);
+  // A path entry before a used one is used, so one not marked would read back marked.
+  const lastUsed = p.path.map((e) => e.used).lastIndexOf(true);
+  if (lastUsed > 0 && p.path.slice(0, lastUsed).some((e) => !e.used)) flag('invalid-third-party-header', 'a third-party path entry before a used one is used too');
 }
 
 /** The third-party header and the encapsulated packet's information field. */
