@@ -265,6 +265,15 @@ export function encodeInformation(data: AprsData): EncodedInformation {
   return guarded(() => encodeShaped(checkShape(data)));
 }
 
+/** Whether a Mic-E attempt reads back with the frequency it was given, fields and all. */
+function readsBackWithItsFrequency(data: AprsData, a: Attempt): boolean {
+  const given = (data as { frequency?: unknown }).frequency;
+  if (given === undefined) return false;
+  const got = toNeutralData(decodeInformation(binaryToBytes(a.binary), a.destination ?? DEFAULT_DESTINATION, ParseOptions.lenient).data) as { frequency?: unknown };
+  const want = toNeutralData(expected(data, a)) as { frequency?: unknown };
+  return JSON.stringify(got.frequency) === JSON.stringify(want.frequency);
+}
+
 function encodeShaped(data: AprsData): EncodedInformation {
   const first = attempt(data, 'plain');
   let problems = check(data, first);
@@ -272,7 +281,11 @@ function encodeShaped(data: AprsData): EncodedInformation {
   if (problems.length > 0 && typeof (data as { comment?: unknown }).comment === 'string') {
     // The comment would read as something else: try it straight after a frequency, then after a
     // /, then after a space.
-    for (const mode of ['joined', 'delimited', 'spaced'] as const) {
+    // Free text after a frequency follows a space. It goes straight on to the frequency only
+    // when the space would make it read as more frequency fields; when the frequency reads back
+    // whole and the text does not (a Mic-E ' X' at the end is the device suffix), it takes a /.
+    const modes = data.type === 'mic-e' && readsBackWithItsFrequency(data, first) ? (['delimited', 'joined', 'spaced'] as const) : (['joined', 'delimited', 'spaced'] as const);
+    for (const mode of modes) {
       let next: Attempt | undefined;
       try {
         next = attempt(data, mode);
