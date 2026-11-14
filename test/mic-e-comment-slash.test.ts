@@ -43,7 +43,7 @@ describe('a run-on weather value before a lifted element', () => {
     ['a DAO in a compressed report', 'N0CALL>APZ001:=/5L!!<*e7_7P[g005t2147483647!w3U!tail'],
   ])('is dropped before %s, and the text after stays apart', (_n, line) => {
     expect(codes(line)).toContain('out-of-range-value');
-    const w = (decodeTnc2(line).data as { weather: Record<string, unknown> }).weather;
+    const w = (decodeTnc2(line).data as unknown as { weather: Record<string, unknown> }).weather;
     expect(w.windGustMph).toBe(5);
     expect(w.temperatureF).toBeUndefined();
   });
