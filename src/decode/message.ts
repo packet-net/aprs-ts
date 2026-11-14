@@ -12,7 +12,7 @@ const PLAIN_ID_RE = /^([A-Za-z0-9]{1,5})$/;
 // ack or rej, the ID, an optional reply-ack, and an optional message ID of its own.
 const ACK_RE = /^(ack|rej)([A-Za-z0-9]{1,5})(?:\}([A-Za-z0-9]{0,5}))?(\{[A-Za-z0-9]{1,5})?$/;
 // A number: an optional -, digits with an optional point, and for a coefficient an exponent.
-const COEFFICIENT_RE = /^-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/;
+const COEFFICIENT_RE = /^-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/;
 const METADATA_PREFIXES = ['PARM.', 'UNIT.', 'EQNS.', 'BITS.'];
 
 interface SplitText {

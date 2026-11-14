@@ -3,8 +3,8 @@
 import { encodeUtf8 } from './bytes.js';
 import { decodeInformation } from './decode/index.js';
 import { identifyDevice } from './deviceid.js';
-import { ParseOptions } from './diagnostics.js';
-import { findQConstruct, parseAx25Frame, parseTnc2Header, type ParsedHeader } from './header.js';
+import { diagnostic, ParseOptions } from './diagnostics.js';
+import { AprsHeaderError, findQConstruct, parseAx25Frame, parseTnc2Header, type ParsedHeader } from './header.js';
 import type { AprsPacket } from './types.js';
 
 function assemble(header: ParsedHeader, options: ParseOptions): AprsPacket {
@@ -48,7 +48,7 @@ export function decodeAx25(frame: Uint8Array, options: ParseOptions = ParseOptio
  * Decodes a KISS frame as read from a TNC: strips any FEND delimiters, undoes FESC escaping and
  * drops the port/command byte (which must be a data frame), then decodes the AX.25 frame.
  *
- * @throws RangeError when the frame is not a KISS data frame; otherwise as `decodeAx25`.
+ * @throws AprsHeaderError (`not-aprs-frame`) when the frame is empty or not a KISS data frame; otherwise as `decodeAx25`.
  */
 export function decodeKiss(frame: Uint8Array, options: ParseOptions = ParseOptions.lenient): AprsPacket {
   return decodeAx25(unwrapKiss(frame), options);
@@ -57,7 +57,7 @@ export function decodeKiss(frame: Uint8Array, options: ParseOptions = ParseOptio
 /**
  * Removes KISS framing: FEND delimiters, FESC escapes and the command byte.
  *
- * @throws RangeError when the frame is empty or its command is not a data frame.
+ * @throws AprsHeaderError (`not-aprs-frame`) when the frame is empty or its command is not a data frame.
  */
 export function unwrapKiss(frame: Uint8Array): Uint8Array {
   let start = 0;
@@ -74,6 +74,6 @@ export function unwrapKiss(frame: Uint8Array): Uint8Array {
       out.push(b);
     }
   }
-  if (out.length === 0 || (out[0]! & 0x0f) !== 0) throw new RangeError('not a KISS data frame');
+  if (out.length === 0 || (out[0]! & 0x0f) !== 0) throw new AprsHeaderError([diagnostic('error', 'not-aprs-frame')]);
   return Uint8Array.from(out.slice(1));
 }
