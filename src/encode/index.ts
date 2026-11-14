@@ -55,8 +55,18 @@ function withCompression(b: { text: string; compression?: CompressionType }): At
   return b.compression ? { binary: b.text, compression: b.compression } : { binary: b.text };
 }
 
+/** The most bytes an information field holds (APRS12c ch. 3). */
+const MAX_INFORMATION_BYTES = 256;
+
 function attempt(data: AprsData, mode: CommentMode): Attempt {
-  return collect(() => attemptOnce(data, mode));
+  return collect(() => {
+    const a = attemptOnce(data, mode);
+    // The size is measured on the fields as given, so a fault later in the reporting order does
+    // not hide it: a field left out makes no bytes, a malformed one the bytes it was given.
+    if (a.binary.length > MAX_INFORMATION_BYTES)
+      flag('too-long', `the information field is ${a.binary.length} bytes; at most ${MAX_INFORMATION_BYTES} are allowed`);
+    return a;
+  });
 }
 
 const INNER_HEADER_CODES: ReadonlySet<string> = new Set([

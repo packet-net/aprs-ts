@@ -71,6 +71,19 @@ export function givenTwiceReason(data: object): string | undefined {
   return givenTwice.get(data);
 }
 
+const micEAltitudeBytes = new WeakSet<object>();
+
+/** Marks Mic-E data whose altitude a builder rounded to the metre: it goes in the Mic-E altitude bytes, never a `/A=`. */
+export function markMicEAltitudeBytesOnly<T extends object>(data: T): T {
+  micEAltitudeBytes.add(data);
+  return data;
+}
+
+/** Whether Mic-E data was marked to send its altitude in the Mic-E altitude bytes only. */
+export function micEAltitudeBytesOnly(data: object): boolean {
+  return micEAltitudeBytes.has(data);
+}
+
 let faults: AprsEncodeError[] | undefined;
 
 /**
@@ -146,9 +159,13 @@ export function whole(
   return n;
 }
 
-/** Free text as UTF-8 bytes (a binary string); refuses a line break, which receivers strip. */
-export function freeText(text: string, what: string): string {
-  if (/[\r\n]/.test(text)) flag('invalid-character', `${what} contains a line break`);
+/**
+ * Free text as UTF-8 bytes (a binary string); refuses a control character (a byte below 0x20, a
+ * line break included, or 0x7F). Text that is data, test data, is refused only a line break, which
+ * receivers strip: `controls` false.
+ */
+export function freeText(text: string, what: string, controls = true): string {
+  if (controls ? /[\x00-\x1f\x7f]/.test(text) : /[\r\n]/.test(text)) flag('invalid-character', `${what} contains a control character`);
   return encodeUtf8Binary(text);
 }
 

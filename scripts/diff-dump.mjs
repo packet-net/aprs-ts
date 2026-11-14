@@ -17,8 +17,12 @@
 // encode: {"n", "data", "exact"} per line, data in the neutral form; writes
 //   {"n", "result": "written|refused|unsupported", "info", "destination", "again", "reason", "refusal"}
 //
-// build: a builder recipe per line; writes
+// build: a builder recipe per line, of which only the keys the recipe gives are passed on (an
+// absent one is never filled in, so the builder's own defaults show); writes
 //   {"n", "result": "built|refused|unsupported", "tnc2", "again", "reason", "refusal"}
+//
+// This library has no fixed capacity, so it never writes the `implementation-limit` result or
+// diagnostic that the README gives a library that has one.
 
 import { createReadStream, createWriteStream } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -432,7 +436,7 @@ function positioned(b, args, report) {
   }
   if (args.ambiguity !== undefined) b.ambiguity(args.ambiguity);
   if (args.dao === true) b.dao();
-  if (args.telemetry !== undefined) b.telemetry(args.telemetry.sequence, args.telemetry.analog, args.telemetry.digital);
+  if (args.telemetry !== undefined) b.telemetry(args.telemetry.sequence, args.telemetry.analog ?? [], args.telemetry.digital);
   if (report !== 'mic-e') {
     if (args.phg !== undefined) b.phg(args.phg.power, args.phg.height, args.phg.gain, args.phg.directivity, args.phg.beacons_per_hour);
     if (args.range_miles !== undefined) b.rangeMiles(args.range_miles);
@@ -471,10 +475,11 @@ function builderFor(recipe) {
     case 'object': {
       checkKeys(a, new Set(['name', 'latitude', 'longitude', 'timestamp', 'killed', ...REPORT_OPTIONS]), report);
       const b = positioned(p.object(a.name, a.latitude, a.longitude), a, report);
-      // An object always has a timestamp; the builder's default is the clock, so a recipe gives one.
-      if (a.timestamp === undefined) unsupported('timestamp', 'an object needs one, and the builder would take the clock');
-      const t = reportTimestamp(a.timestamp);
-      b.timestamp(t.date, t.kind);
+      // An object with no timestamp is the builder's to refuse (missing-field): it never reads the clock.
+      if (a.timestamp !== undefined) {
+        const t = reportTimestamp(a.timestamp);
+        b.timestamp(t.date, t.kind);
+      }
       if (a.killed === true) b.killed();
       return b;
     }
@@ -488,8 +493,8 @@ function builderFor(recipe) {
       checkKeys(a, new Set(['latitude', 'longitude', 'mic_e_message', 'messaging', ...POSITIONED_OPTIONS]), report);
       const b = positioned(p.micE(a.latitude, a.longitude), a, report);
       if (a.mic_e_message !== undefined) b.micEMessage(a.mic_e_message);
-      // The type code says whether the sender takes messages: ` if so, ' if not.
-      b.messaging(a.messaging === true);
+      // The type code says whether the sender takes messages: ` if so, ' if not; left alone when the recipe is silent.
+      if (a.messaging !== undefined) b.messaging(a.messaging === true);
       return b;
     }
     case 'weather': {
@@ -506,14 +511,15 @@ function builderFor(recipe) {
         return b;
       }
       if (a.symbol !== undefined) unsupported('symbol', 'a positionless weather report has no symbol');
-      if (a.timestamp === undefined) unsupported('timestamp', 'a positionless weather report needs one, and the builder would take the clock');
+      // With no timestamp the builder refuses (missing-field): it never reads the clock.
+      if (a.timestamp === undefined) return p.weather(w);
       const { date, format } = when(a.timestamp);
       if (format !== 'mdhm') unsupported('timestamp', `a positionless weather report's timestamp is mdhm, not ${format}`);
       return p.weather(w, { at: date });
     }
     case 'message': {
       checkKeys(a, new Set(['addressee', 'text', 'message_id', 'reply_ack']), report);
-      const b = p.message(a.addressee, a.text);
+      const b = p.message(a.addressee, a.text ?? '');
       if (a.message_id !== undefined) b.messageId(a.message_id);
       if (a.reply_ack !== undefined) b.replyAck(a.reply_ack);
       return b;
@@ -524,7 +530,7 @@ function builderFor(recipe) {
       return report === 'ack' ? p.ack(a.addressee, a.message_id) : p.reject(a.addressee, a.message_id);
     case 'bulletin':
       checkKeys(a, new Set(['id', 'group', 'text']), report);
-      return p.bulletin(a.id, a.text, a.group ?? '');
+      return p.bulletin(a.id, a.text ?? '', a.group ?? '');
     case 'status': {
       checkKeys(a, new Set(['text', 'timestamp', 'locator', 'symbol', 'beam']), report);
       const b = p.status(a.text);
@@ -546,7 +552,8 @@ function builderFor(recipe) {
     }
     case 'telemetry': {
       checkKeys(a, new Set(['sequence', 'analog', 'bits', 'comment']), report);
-      const b = p.telemetry(a.sequence, a.analog, a.bits);
+      // The builder takes the analog values as an argument: with none given, the five channels are empty.
+      const b = p.telemetry(a.sequence, a.analog ?? [null, null, null, null, null], a.bits);
       if (a.comment !== undefined) b.comment(a.comment);
       return b;
     }

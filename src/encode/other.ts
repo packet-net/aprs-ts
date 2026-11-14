@@ -270,7 +270,7 @@ export function encodeUserDefined(d: UserDefined): string {
 }
 
 export function encodeTest(d: TestData): string {
-  return `,${freeText(d.data ?? '', 'test data')}`;
+  return `,${freeText(d.data ?? '', 'test data', false)}`;
 }
 
 export function encodeAgrelo(d: AgreloDf): string {
