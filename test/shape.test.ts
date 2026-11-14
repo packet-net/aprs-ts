@@ -137,3 +137,25 @@ describe('a missing field does not jump the Refusal reasons order', () => {
     expect(outcome(() => encodeInformation({ type: 'position', longitude: 1, symbol } as unknown as AprsData))).toBe('missing-field');
   });
 });
+
+describe('round 3 run 1', () => {
+  it('checks both units of a weather value given twice, and ranks value-given-twice after missing-field', () => {
+    const at = { latitude: 49.5, longitude: -72.75 };
+    // Both in range: value-given-twice.
+    expect(outcome(() => Aprs.from('N0CALL').weather({ temperatureF: 68, temperatureC: 20 } as never, at).build())).toBe('value-given-twice');
+    // The Fahrenheit value is out of range, the Celsius one is not: value-out-of-range.
+    expect(outcome(() => Aprs.from('N0CALL').weather({ temperatureF: 1000, temperatureC: 20 } as never, at).build())).toBe('value-out-of-range');
+    expect(outcome(() => Aprs.from('N0CALL').weather({ temperatureF: 68, temperatureC: 1000 } as never, at).build())).toBe('value-out-of-range');
+  });
+
+  it('names NaN and infinities not-a-number wherever a check catches them, and never hangs', () => {
+    const position = { type: 'position', ...at, compressed: true, courseDegrees: 90 };
+    expect(outcome(() => encodeInformation({ ...position, speedKnots: Infinity } as unknown as AprsData))).toBe('not-a-number');
+    expect(outcome(() => encodeInformation({ type: 'position', ...at, compressed: true, rangeMiles: Infinity } as unknown as AprsData))).toBe('not-a-number');
+    expect(outcome(() => encodeInformation({ type: 'position', ...at, compressed: true, ambiguity: NaN } as unknown as AprsData))).toBe('not-a-number');
+    expect(outcome(() => encodeInformation({ type: 'position', ...at, ambiguity: Infinity } as unknown as AprsData))).toBe('not-a-number');
+    expect(outcome(() => encodeInformation({ type: 'mic-e', micEMessage: 'off-duty', ...at, altitudeFeet: NaN, comment: 'a\rb' } as unknown as AprsData))).toBe('not-a-number');
+    expect(outcome(() => encodeInformation({ type: 'nmea', sentence: 'GPRMC,1*4G', courseDegrees: NaN } as unknown as AprsData))).toBe('not-a-number');
+    expect(outcome(() => Aprs.from('N0CALL').position(49.5, -72.75).ambiguity(Infinity).build())).toBe('not-a-number');
+  });
+});

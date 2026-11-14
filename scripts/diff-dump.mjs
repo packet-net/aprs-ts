@@ -41,6 +41,40 @@ import {
 // The neutral form and the byte helpers are not public API: the dump tool reads them from dist.
 import { encodeUtf8, hexToBytes } from '../dist/bytes.js';
 import { fromNeutralData, toNeutralData, toNeutralHeader } from '../dist/neutral.js';
+import { refusalRank } from '../dist/encode/common.js';
+
+/**
+ * JSON that may hold the non-standard tokens NaN, Infinity and -Infinity, which generate.py
+ * writes with --nonfinite: they are read as numbers, outside strings only.
+ */
+function parseJson(line) {
+  if (!/NaN|Infinity/.test(line)) return JSON.parse(line);
+  const MARK = '\u0000nonfinite:';
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inString) {
+      out += c;
+      if (c === '\\') out += line[++i];
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      out += c;
+      continue;
+    }
+    const token = ['-Infinity', 'Infinity', 'NaN'].find((t) => line.startsWith(t, i));
+    if (token) {
+      out += JSON.stringify(MARK + token);
+      i += token.length - 1;
+      continue;
+    }
+    out += c;
+  }
+  return JSON.parse(out, (_k, v) => (typeof v === 'string' && v.startsWith(MARK) ? Number(v.slice(MARK.length)) : v));
+}
 
 const argv = process.argv.slice(2);
 const mode = argv.includes('--encode') ? 'encode' : argv.includes('--build') ? 'build' : 'decode';
@@ -280,7 +314,7 @@ function lostKeys(a, b, out) {
 }
 
 function encodeRecord(n, line) {
-  const { data } = JSON.parse(line);
+  const { data } = parseJson(line);
   let own;
   try {
     own = fromNeutralData(data);
@@ -350,12 +384,14 @@ const WEATHER_VALUES = {
   rain_24h_mm: 'rain24hMm',
   rain_midnight_mm: 'rainMidnightMm',
 };
-/** Recipe keys the builder takes in another unit beside the APRS one: given both, unsupported. */
-const WEATHER_PAIRS = [
-  ['temperature_c', 'temperature_f'],
-  ['rain_1h_mm', 'rain_1h_in'],
-  ['rain_24h_mm', 'rain_24h_in'],
-  ['rain_midnight_mm', 'rain_midnight_in'],
+/**
+ * Positioned recipe keys for one quantity in two units. The builder takes one unit per setter, so
+ * a recipe giving both is built once with each unit, and the refusal is the first code in the
+ * order among both results and value-given-twice (vectors README, Builder rules).
+ */
+const UNIT_PAIRS = [
+  ['speed_knots', 'speed_kmh'],
+  ['altitude_feet', 'altitude_m'],
 ];
 
 /** A recipe timestamp as the builder takes it: a Date and the form to write. */
@@ -378,7 +414,6 @@ function reportTimestamp(t) {
 function positioned(b, args, report) {
   if (args.symbol !== undefined) b.symbol(args.symbol);
   if (args.course_degrees !== undefined) b.courseDegrees(args.course_degrees);
-  if (args.speed_knots !== undefined && args.speed_kmh !== undefined) unsupported('speed_kmh', 'given with speed_knots');
   if (args.speed_knots !== undefined) b.speedKnots(args.speed_knots);
   if (args.speed_kmh !== undefined) b.speedKmh(args.speed_kmh);
   if (args.altitude_feet !== undefined) b.altitudeFeet(args.altitude_feet);
@@ -406,10 +441,8 @@ function positioned(b, args, report) {
   return b;
 }
 
+/** Weather for the builder's one weather input, which takes a value in two units and refuses it, ranked. */
 function weatherOf(args) {
-  for (const [metric, aprs] of WEATHER_PAIRS) {
-    if (args[metric] !== undefined && args[aprs] !== undefined) unsupported(metric, `given with ${aprs}`);
-  }
   const w = {};
   for (const [key, field] of Object.entries(WEATHER_VALUES)) if (args[key] !== undefined) w[field] = args[key];
   return w;
@@ -497,8 +530,11 @@ function builderFor(recipe) {
       const b = p.status(a.text);
       if (a.timestamp !== undefined) {
         const { date, format } = when(a.timestamp);
-        if (format !== 'dhm') unsupported('timestamp', `a status timestamp is dhm, not ${format}`);
-        b.timestamp(date);
+        if (format === 'dhm') b.timestamp(date);
+        // Any other form is given as it is, for the encoder to refuse (invalid-timestamp).
+        else if (format === 'hms') b.timestamp({ kind: 'hms', hour: date.getUTCHours(), minute: date.getUTCMinutes(), second: date.getUTCSeconds() });
+        else if (format === 'mdhm') b.timestamp({ kind: 'mdhm', month: date.getUTCMonth() + 1, day: date.getUTCDate(), hour: date.getUTCHours(), minute: date.getUTCMinutes() });
+        else unsupported('timestamp', `${format} is not a timestamp form`);
       }
       if (a.locator !== undefined || a.symbol !== undefined) {
         if (a.locator === undefined) unsupported('symbol', 'the builder takes a status symbol only with a locator');
@@ -531,16 +567,38 @@ function builderFor(recipe) {
   }
 }
 
-function buildRecord(n, line) {
-  const recipe = JSON.parse(line);
-  let packet;
+/** Builds a recipe: the packet, or the refusal or unsupported record. */
+function buildOnce(n, recipe) {
   try {
-    packet = builderFor(recipe).build();
+    return { packet: builderFor(recipe).build() };
   } catch (e) {
-    if (e instanceof Unsupported) return { n, result: 'unsupported', reason: e.message };
-    if (isRefusal(e)) return { n, result: 'refused', reason: e.message, refusal: refusalCode(e) };
+    if (e instanceof Unsupported) return { record: { n, result: 'unsupported', reason: e.message } };
+    if (isRefusal(e)) return { record: { n, result: 'refused', reason: e.message, refusal: refusalCode(e) } };
     throw e;
   }
+}
+
+function buildRecord(n, line) {
+  const recipe = parseJson(line);
+  const args = recipe.args ?? {};
+  const twice = UNIT_PAIRS.filter(([a, b]) => args[a] !== undefined && args[b] !== undefined);
+  if (twice.length > 0) {
+    // Once with each unit, never a line built from one of them.
+    const without = (i) => {
+      const a = { ...args };
+      for (const pair of twice) delete a[pair[i]];
+      return { ...recipe, args: a };
+    };
+    const results = [buildOnce(n, without(1)), buildOnce(n, without(0))].map((r) => r.record ?? { result: 'built' });
+    const other = results.find((r) => r.result === 'unsupported');
+    if (other) return other;
+    const refusals = results.filter((r) => r.result === 'refused');
+    refusals.push({ n, result: 'refused', reason: `${twice.map((p) => p.join(' and ')).join(', ')} given together`, refusal: 'value-given-twice' });
+    return refusals.reduce((best, r) => (refusalRank(r.refusal) < refusalRank(best.refusal) ? r : best));
+  }
+  const once = buildOnce(n, recipe);
+  if (once.record) return once.record;
+  const packet = once.packet;
   const tnc2 = packet.toTnc2Bytes();
   return { n, result: 'built', tnc2: bytesToHex(tnc2), again: decodedAgain(tnc2, true) };
 }

@@ -95,7 +95,7 @@ function digitsMode(f: PositionedFields): DigitsMode {
 
 function blank(text: string, positions: readonly number[], ambiguity: number): string {
   const chars = text.split('');
-  for (let k = 0; k < ambiguity; k++) chars[positions[positions.length - 1 - k]!] = ' ';
+  for (let k = 0; k < Math.min(ambiguity, positions.length); k++) chars[positions[positions.length - 1 - k]!] = ' ';
   return chars.join('');
 }
 
@@ -103,8 +103,10 @@ function blank(text: string, positions: readonly number[], ambiguity: number): s
 function uncompressedPosition(f: PositionedFields): { text: string; latExtra: number; lonExtra: number } {
   if (!(f.latitude >= -90 && f.latitude <= 90)) flag(numberFault(f.latitude), `latitude ${f.latitude} is out of range`);
   if (!(f.longitude >= -180 && f.longitude <= 180)) flag(numberFault(f.longitude), `longitude ${f.longitude} is out of range`);
-  const ambiguity = f.ambiguity ?? 0;
-  if (!Number.isInteger(ambiguity) || ambiguity < 0 || ambiguity > 4) flag(numberFault(ambiguity), 'ambiguity is 0-4 digits');
+  const given = f.ambiguity ?? 0;
+  // A level outside 0-4 is refused; the position is written with none so the rest can be checked.
+  const ambiguity = Number.isInteger(given) && given >= 0 && given <= 4 ? given : 0;
+  if (ambiguity !== given) flag(numberFault(given), 'ambiguity is 0-4 digits');
   checkSymbol(f.symbol);
   const mode = digitsMode(f);
   const lat = digitsOf(f.latitude, mode, ambiguity);
@@ -149,7 +151,9 @@ function compressedPosition(
 ): { text: string; latExtra: number; lonExtra: number } {
   if (!(f.latitude >= -90 && f.latitude <= 90)) flag(numberFault(f.latitude), `latitude ${f.latitude} is out of range`);
   if (!(f.longitude >= -180 && f.longitude <= 180)) flag(numberFault(f.longitude), `longitude ${f.longitude} is out of range`);
-  if ((f.ambiguity ?? 0) !== 0) flag('field-not-allowed', 'a compressed position cannot be ambiguous');
+  // NaN or an infinity is not-a-number at every check that catches it, this one included.
+  if (f.ambiguity !== undefined && !Number.isFinite(f.ambiguity)) flag('not-a-number', 'ambiguity is not a number');
+  else if ((f.ambiguity ?? 0) !== 0) flag('field-not-allowed', 'a compressed position cannot be ambiguous');
   checkSymbol(f.symbol);
   let table = f.symbol.table;
   if (table >= '0' && table <= '9') table = String.fromCharCode(table.charCodeAt(0) + 49); // 0-9 -> a-j
@@ -191,7 +195,8 @@ function compressedDirection(degrees: number): string {
  * rulings, G3).
  */
 function compressedSpeed(knots: number, what: string): string {
-  if (!(knots > -1)) flag(numberFault(knots), `${what} has no compressed form`);
+  if (!Number.isFinite(knots)) flag('not-a-number', `${what} is not a number`);
+  else if (!(knots > -1)) flag(numberFault(knots), `${what} has no compressed form`);
   const s = nearest(Math.log(knots + 1) / Math.log(1.08));
   if (s < 0) flag('value-out-of-range', `${what} is negative`);
   if (s > 90) flag('value-out-of-range', `${what} is too high for the compressed format`);
@@ -203,7 +208,8 @@ function compressedSpeed(knots: number, what: string): string {
  * that s is below 0, so 1.95 miles is 2 and 1.9 is refused (vectors rulings, G3).
  */
 function compressedRange(miles: number): string {
-  if (!(miles > 0)) flag(numberFault(miles), 'a compressed range is at least 2 miles');
+  if (!Number.isFinite(miles)) flag('not-a-number', 'range is not a number');
+  else if (!(miles > 0)) flag(numberFault(miles), 'a compressed range is at least 2 miles');
   const s = nearest(Math.log(miles / 2) / Math.log(1.08));
   if (s < 0) flag('value-out-of-range', 'a compressed range is at least 2 miles');
   if (s > 90) flag('value-out-of-range', 'range is out of range for the compressed format');
@@ -729,7 +735,8 @@ function micEDestination(d: MicEReport, lat: Digits, lonDegrees: number): string
     bits = CUSTOM[message]!;
     custom = true;
   } else flag('invalid-code', `the Mic-E message ${message} has no encoding`);
-  const ambiguity = d.ambiguity ?? 0;
+  const given = d.ambiguity ?? 0;
+  const ambiguity = Number.isInteger(given) && given >= 0 && given <= 4 ? given : 0;
   const digits = pad(lat.degrees, 2) + pad(lat.hundredths, 4);
   let out = '';
   for (let k = 0; k < 6; k++) {
@@ -751,6 +758,8 @@ function micEDestination(d: MicEReport, lat: Digits, lonDegrees: number): string
 }
 
 export function micEAltitude(feet: number): string | undefined {
+  // NaN or an infinity has no Mic-E bytes; the /A= check names it not-a-number.
+  if (!Number.isFinite(feet)) return undefined;
   const metres = nearest(feet * METRES_PER_FOOT);
   if (Math.abs(metres / METRES_PER_FOOT - feet) > 1e-6) return undefined;
   const v = metres + 10000;
@@ -766,8 +775,10 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   checkSymbol(d.symbol);
   if (d.weather) flag('field-not-allowed', 'a Mic-E report has no weather data');
   if (d.dfBearing || d.storm || d.area || d.signpost !== undefined) flag('field-not-allowed', 'a Mic-E report cannot carry that data');
-  const ambiguity = d.ambiguity ?? 0;
-  if (!Number.isInteger(ambiguity) || ambiguity < 0 || ambiguity > 4) flag(numberFault(ambiguity), 'ambiguity is 0-4 digits');
+  const given = d.ambiguity ?? 0;
+  // A level outside 0-4 is refused; the position is written with none so the rest can be checked.
+  const ambiguity = Number.isInteger(given) && given >= 0 && given <= 4 ? given : 0;
+  if (ambiguity !== given) flag(numberFault(given), 'ambiguity is 0-4 digits');
   const digits = digitsMode(d);
   const lat = digitsOf(d.latitude, digits, ambiguity);
   const lon = digitsOf(d.longitude, digits, ambiguity);

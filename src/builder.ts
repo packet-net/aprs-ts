@@ -13,7 +13,7 @@
 // `build()` encodes the packet, so anything the spec does not allow is refused there, with an
 // `AprsEncodeError` that says why.
 
-import { DEFAULT_DESTINATION, markGivenTwice, nearest, numberFault, refuse } from './encode/common.js';
+import { AprsEncodeError, DEFAULT_DESTINATION, firstRefusal, markGivenTwice, nearest, numberFault, refuse } from './encode/common.js';
 import { ax25Of, checkHeaderAddresses, encodeInformation, tnc2BytesOf, tnc2TextOf, wrapKiss } from './encode/index.js';
 import { symbolOf } from './symbols.js';
 import type {
@@ -75,7 +75,7 @@ function built(header: Header, data: AprsData): BuiltPacket {
   // Refusal reasons); a Mic-E destination is computed, and always a valid address.
   const given = data.type === 'mic-e' ? DEFAULT_DESTINATION : (header.destination ?? DEFAULT_DESTINATION);
   checkHeaderAddresses(header.source, given, text);
-  const encoded = encodeInformation(data);
+  const encoded = encodeChecked(data);
   const destination = encoded.destination ?? header.destination ?? DEFAULT_DESTINATION;
   checkHeaderAddresses(header.source, destination, text);
   const information = encoded.information;
@@ -131,7 +131,36 @@ function weatherOf(input: WeatherInput): Weather {
   convert(rain1hMm, 'rain1hIn', (mm) => mm / MM_PER_INCH);
   convert(rain24hMm, 'rain24hIn', (mm) => mm / MM_PER_INCH);
   convert(rainMidnightMm, 'rainMidnightIn', (mm) => mm / MM_PER_INCH);
-  return twice === undefined ? w : markGivenTwice(w, twice);
+  if (twice === undefined) return w;
+  // The same weather with the values given in the APRS units, so they are checked too.
+  const marked = markGivenTwice(w, twice);
+  aprsUnits.set(marked, rest as Weather);
+  return marked;
+}
+
+/** For weather given a value in two units, the weather with the APRS-unit values instead. */
+const aprsUnits = new WeakMap<object, Weather>();
+
+/**
+ * Encodes data a builder made from one input that gave a value in two units: every value is
+ * checked on its own, so the refusal is the first code in the order among both encodings and
+ * `value-given-twice` (vectors README, Builder rules). Other data is encoded as it is.
+ */
+function encodeChecked(data: AprsData): ReturnType<typeof encodeInformation> {
+  const weather = (data as { weather?: object }).weather;
+  const other = weather === undefined ? undefined : aprsUnits.get(weather);
+  if (other === undefined) return encodeInformation(data);
+  const faults: AprsEncodeError[] = [];
+  for (const d of [data, { ...data, weather: other } as AprsData]) {
+    try {
+      encodeInformation(d);
+    } catch (e) {
+      if (!(e instanceof AprsEncodeError)) throw e;
+      faults.push(e);
+    }
+  }
+  faults.push(new AprsEncodeError(`a weather value is given in two units`, 'value-given-twice'));
+  throw firstRefusal(faults);
 }
 
 function asSymbol(symbol: AprsSymbol | string): AprsSymbol {

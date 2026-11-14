@@ -204,6 +204,8 @@ export function encodeRawWeather(d: RawWeather): string {
 }
 
 export function encodeNmea(d: NmeaSentence): string {
+  // A field given as NaN or an infinity is not-a-number, the check that compares it with the sentence included.
+  for (const v of [d.latitude, d.longitude, d.courseDegrees, d.speedKnots, d.altitudeM]) if (v !== undefined && !Number.isFinite(v)) flag('not-a-number', 'an NMEA field is not a number');
   const parts = splitNmea(d.sentence);
   if (!parts || parts.rest.length > 0) flag('invalid-nmea', 'not an NMEA 0183 sentence');
   else if (!parts.checksumOk) flag('invalid-nmea', "the NMEA sentence's checksum does not match");

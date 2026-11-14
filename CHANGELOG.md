@@ -14,6 +14,12 @@ The header comes first: a builder, `encodeTnc2`, `encodeTnc2Bytes` and `encodeAx
 
 Builder. A setter replaces its quantity whatever unit it was given in, so on a kept builder the last altitude setter wins again (`.altitudeFeet(1000).altitudeM(100)` sends 328 feet). This reverses 1.0.1, where `.altitudeFeet()` and `.altitudeM()` together were refused with `value-given-twice`; that refusal is now only for one input that carries the same quantity in two units at once, such as a weather input with `temperatureF` and `temperatureC`.
 
+A weather input that gives one value in two units (`temperatureF` and `temperatureC`, say) has both values checked: the refusal is the first code in the order among both, the other faults and `value-given-twice`, which comes after `missing-field`, so an out-of-range value in either unit is `value-out-of-range`.
+
+NaN and infinities are `not-a-number` wherever a check catches them: a compressed speed, range or ambiguity, a Mic-E altitude, and an NMEA field beside its sentence. An ambiguity of infinity no longer hangs the encoder.
+
+The dump tool reads the `NaN`, `Infinity` and `-Infinity` tokens `generate.py --nonfinite` writes; builds a recipe giving one quantity in two units once with each unit and reports the first code among both results and `value-given-twice`, never `unsupported`; and gives a status recipe's `hms` or `mdhm` timestamp to the builder, which refuses it as `invalid-timestamp`.
+
 ### Behaviour changes for 1.x callers
 
 - A lower-case locator in neutral or hand-built data (a status, a Mic-E report, a Maidenhead beacon) is refused as `malformed`; builders still upper-case it.
