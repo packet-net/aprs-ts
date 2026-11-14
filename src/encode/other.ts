@@ -240,7 +240,7 @@ export function encodeQuery(d: Query): string {
 }
 
 /** A footprint value as a decoder reads it: a number as a telemetry value is, a positive one after at most one space. */
-const FOOTPRINT_VALUE = /^(?: ?(?:[0-9]+\.?[0-9]*|\.[0-9]+)|-(?:[0-9]+\.?[0-9]*|\.[0-9]+))$/;
+const FOOTPRINT_VALUE = /^(?: ?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)|-(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))$/;
 
 /** A control character: below U+0020, or U+007F. */
 const CONTROL_RE = /[\x00-\x1f\x7f]/;

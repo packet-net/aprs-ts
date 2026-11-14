@@ -68,7 +68,7 @@ export function decodeStatus(ctx: DecodeContext, s: string): StatusReport {
   return out;
 }
 
-const TELEMETRY_VALUE_RE = /^-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)$/;
+const TELEMETRY_VALUE_RE = /^-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$/;
 
 /** `T`: a telemetry report. */
 export function decodeTelemetry(ctx: DecodeContext, s: string): TelemetryReport {
@@ -131,7 +131,7 @@ export function decodeTelemetry(ctx: DecodeContext, s: string): TelemetryReport 
   return out;
 }
 
-const FOOTPRINT_NUMBER = '[0-9]+\\.?[0-9]*|\\.[0-9]+';
+const FOOTPRINT_NUMBER = '[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+';
 const FOOTPRINT_VALUE = `( ?(?:${FOOTPRINT_NUMBER})|-(?:${FOOTPRINT_NUMBER}))`;
 const FOOTPRINT_RE = new RegExp(`^${FOOTPRINT_VALUE},${FOOTPRINT_VALUE},([0-9]{4})$`);
 

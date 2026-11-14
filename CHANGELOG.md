@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+A decoded packet now owns its bytes: `decodeTnc2`, `decodeAx25` and `decodeKiss` copy the information field instead of sharing memory with the caller's buffer, so a read loop that reuses its buffer no longer corrupts packets already decoded. `decodeKiss` and `unwrapKiss` throw `AprsHeaderError` (`not-aprs-frame`), not a `RangeError`, for an empty frame or a non-data KISS command. `toKiss(port)` and `wrapKiss` throw a `RangeError` unless the port is an integer 0-15, instead of masking it. The number patterns for telemetry values, equation coefficients and query footprints (decoder and encoder) take linear time on a long run of digits, with the same accepted text. README: the sibling libraries are listed and linked correctly, and the package is stated to be ESM only. The publish workflow refuses a tag or manual version that differs from package.json.
+
 ## 1.1.0 (2026-11-14)
 
 The round 3 rulings of the conformance vectors (aprs-vectors#24), for 1.1.0. The vectors runner now checks the refusal code each case names, not only that the encoder refused.

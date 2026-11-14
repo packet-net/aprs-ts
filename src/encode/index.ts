@@ -390,8 +390,9 @@ export function encodeAx25(p: PacketToEncode): Uint8Array {
   });
 }
 
-/** Wraps an AX.25 frame for a KISS TNC: FEND, a data command on `port`, escaping, FEND. */
+/** Wraps an AX.25 frame for a KISS TNC: FEND, a data command on `port`, escaping, FEND. Throws RangeError unless `port` is an integer 0-15. */
 export function wrapKiss(frame: Uint8Array, port = 0): Uint8Array {
+  if (!Number.isInteger(port) || port < 0 || port > 15) throw new RangeError('a KISS port is 0-15');
   const out: number[] = [0xc0, (port & 0x0f) << 4];
   for (const b of frame) {
     if (b === 0xc0) out.push(0xdb, 0xdc);

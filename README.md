@@ -8,17 +8,19 @@ An APRS (Automatic Packet Reporting System) encoder and decoder for TypeScript.
 - An encoder for every type that writes only what the spec allows, and refuses anything else with a reason.
 - A fluent builder for the packets an application usually sends.
 - Every APRS symbol by name, with overlays; device identification from the APRS device database.
-- Zero runtime dependencies; ESM; works in browsers and Node 20 and later. Bytes are `Uint8Array`.
+- Zero runtime dependencies; ESM only; works in browsers and Node 20 and later. Bytes are `Uint8Array`.
 
 Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.1: every case passes.
 
-It is conformance tested against [aprs-vectors](https://github.com/packet-net/aprs-vectors), the language-neutral test suite shared with [Packet.Aprs](https://github.com/packet-net/packet.net) (C#), [pdn-aprs](https://github.com/packet-net/aprs-rs) (Rust) and [pdn-aprs](https://github.com/packet-net/aprs-py) (Python), and agrees with the C# and Rust implementations over a 6.9-million-packet APRS-IS capture.
+It is conformance tested against [aprs-vectors](https://github.com/packet-net/aprs-vectors), the language-neutral test suite shared with the sibling libraries: [aprs-cs](https://github.com/packet-net/aprs-cs) (C#), [aprs-rs](https://github.com/packet-net/aprs-rs) (Rust), [aprs-py](https://github.com/packet-net/aprs-py) (Python), [aprs-c](https://github.com/packet-net/aprs-c) (C) and [aprs-go](https://github.com/packet-net/aprs-go) (Go). The C# and Rust libraries were also compared with this one over a 6.9-million-packet APRS-IS capture.
 
 ## Install
 
 ```sh
 npm install @packet-net/pdn-aprs
 ```
+
+The package is ESM only; there is no CommonJS build. From CommonJS, load it with a dynamic `import()` (`const { decodeTnc2 } = await import('@packet-net/pdn-aprs');`), or use `require()` on Node 20.19 or later, which can load ESM. `require()` fails on earlier Node 20 releases.
 
 ## Decoding
 
