@@ -39,6 +39,16 @@ import {
 import { bytesToHex, decodeUtf8, encodeUtf8 } from '../src/bytes.js';
 import { toNeutralData } from '../src/neutral.js';
 
+const codeOf = (fn: () => unknown): RefusalCode => {
+  try {
+    fn();
+  } catch (e) {
+    if (e instanceof AprsEncodeError) return e.code;
+    throw e;
+  }
+  throw new Error('not refused');
+};
+
 describe('builder', () => {
   it('builds a position report', () => {
     const packet = Aprs.from('M0LTE-9')
@@ -124,9 +134,9 @@ describe('builder', () => {
 
   it('refuses what the spec does not allow, and says why', () => {
     expect(() => Aprs.from('M0LTE').message('N0CALL', 'x'.repeat(68)).build()).toThrow(AprsEncodeError);
-    expect(() => Aprs.from('M0LTE').position(51, 0).comment('/A=001234').build()).toThrow(/read back/);
-    expect(() => Aprs.from('M0LTE').object('OR4F ', 51, 2).build()).toThrow(/space/);
-    expect(() => Aprs.from('M0LTE').position(91, 0).build()).toThrow(/latitude/);
+    expect(() => Aprs.from('M0LTE').position(51, 0).symbol('/>').comment('/A=001234').build()).toThrow(/read back/);
+    expect(() => Aprs.from('M0LTE').object('OR4F ', 51, 2).symbol('/>').timestamp({ kind: 'dhm-zulu', day: 1, hour: 2, minute: 3 }).build()).toThrow(/space/);
+    expect(() => Aprs.from('M0LTE').position(91, 0).symbol('/>').build()).toThrow(/latitude/);
   });
 
   it('writes AX.25 and KISS frames', () => {
@@ -289,19 +299,49 @@ describe('builder rulings (vectors rulings, B1, B2, B6)', () => {
   const info = (line: string): string => line.slice(line.indexOf(':') + 1);
 
   it('takes a course of 0 as unknown', () => {
-    expect(info(Aprs.from('N0CALL').position(49.5, -72.75).courseDegrees(0).speedKnots(10).toTnc2())).toBe('!4930.00N/07245.00W/000/010');
-    const micE = Aprs.from('N0CALL').micE(49.5, -72.75).courseDegrees(0.3).speedKnots(10).build();
+    expect(info(Aprs.from('N0CALL').position(49.5, -72.75).symbol('//').courseDegrees(0).speedKnots(10).toTnc2())).toBe('!4930.00N/07245.00W/000/010');
+    const micE = Aprs.from('N0CALL').micE(49.5, -72.75).symbol('//').courseDegrees(0.3).speedKnots(10).build();
     const back = decodeTnc2(micE.toTnc2());
     if (back.data.type !== 'mic-e') throw new Error(back.data.type);
     expect(back.data.courseDegrees).toBeUndefined();
-    expect(() => Aprs.from('N0CALL').position(49.5, -72.75).courseDegrees(0).speedKnots(10).compressed().build()).toThrow(AprsEncodeError);
+    expect(() => Aprs.from('N0CALL').position(49.5, -72.75).symbol('//').courseDegrees(0).speedKnots(10).compressed().build()).toThrow(AprsEncodeError);
   });
 
-  it('puts Mic-E metres in the Mic-E altitude bytes and feet in a /A=', () => {
-    const metres = Aprs.from('N0CALL').micE(49.5, -72.75).altitudeM(100.4).build();
+  it('puts a Mic-E altitude, in metres or feet, in the Mic-E altitude bytes', () => {
+    const metres = Aprs.from('N0CALL').micE(49.5, -72.75).symbol('//').altitudeM(100.4).build();
     expect(decodeUtf8(metres.information)).toContain('"4{}');
-    const feet = Aprs.from('N0CALL').micE(49.5, -72.75).altitudeFeet(0).build();
-    expect(decodeUtf8(feet.information)).toContain('/A=000000');
+    const zero = Aprs.from('N0CALL').micE(49.5, -72.75).symbol('//').altitudeFeet(0).build();
+    expect(decodeUtf8(zero.information)).toContain('"3r}');
+    // 1000 ft is 304.8 m, written as 305 m, never as a /A=.
+    const feet = Aprs.from('N0CALL').micE(49.5, -72.75).symbol('//').altitudeFeet(1000).build();
+    expect(decodeUtf8(feet.information)).toContain('"77}');
+    expect(decodeUtf8(feet.information)).not.toContain('/A=');
+  });
+
+  it('refuses a Mic-E altitude outside the Mic-E bytes instead of moving it to a /A=', () => {
+    expect(codeOf(() => Aprs.from('N0CALL').micE(49.5, -72.75).symbol('//').altitudeFeet(-50000).build())).toBe('value-out-of-range');
+    expect(codeOf(() => Aprs.from('N0CALL').micE(49.5, -72.75).symbol('//').altitudeM(743571).build())).toBe('value-out-of-range');
+    expect(Aprs.from('N0CALL').micE(49.5, -72.75).symbol('//').altitudeM(743570).build().information.length).toBeGreaterThan(9);
+  });
+
+  it('writes what the program did not say as the least: no symbol is refused, messaging is off, bits are zero', () => {
+    expect(codeOf(() => Aprs.from('N0CALL').position(49.5, -72.75).build())).toBe('invalid-symbol');
+    expect(codeOf(() => Aprs.from('N0CALL').object('OBJ', 49.5, -72.75).timestamp({ kind: 'dhm-zulu', day: 1, hour: 2, minute: 3 }).build())).toBe('invalid-symbol');
+    expect(codeOf(() => Aprs.from('N0CALL').item('ITEM', 49.5, -72.75).build())).toBe('invalid-symbol');
+    expect(codeOf(() => Aprs.from('N0CALL').micE(49.5, -72.75).build())).toBe('invalid-symbol');
+    expect(Aprs.from('N0CALL').micE(49.5, -72.75).symbol('//').toTnc2().endsWith("//'")).toBe(true);
+    expect(Aprs.from('N0CALL').micE(49.5, -72.75).symbol('//').messaging().toTnc2().endsWith('//`')).toBe(true);
+    expect(info(Aprs.from('N0CALL').telemetry(7, [1, 2, 3, 4, 5]).toTnc2())).toBe('T#007,001,002,003,004,005,00000000');
+    expect(codeOf(() => Aprs.from('N0CALL').telemetry(undefined as never, [1, 2, 3, 4, 5]).build())).toBe('missing-field');
+  });
+
+  it('never reads the clock: an object or positionless weather report with no time is refused', () => {
+    expect(codeOf(() => Aprs.from('N0CALL').object('OBJ', 49.5, -72.75).symbol('//').build())).toBe('missing-field');
+    expect(codeOf(() => Aprs.from('N0CALL').weather({ temperatureF: 61 }).build())).toBe('missing-field');
+    expect(codeOf(() => Aprs.from('N0CALL').weather({ temperatureF: 61 }, {}).build())).toBe('missing-field');
+    const now = new Date();
+    expect(Aprs.from('N0CALL').object('OBJ', 49.5, -72.75).symbol('//').timestamp(now).build().data).toMatchObject({ type: 'object' });
+    expect(Aprs.from('N0CALL').weather({ temperatureF: 61 }, { at: now }).build().data).toMatchObject({ type: 'weather' });
   });
 
   it('converts Celsius and millimetres', () => {
@@ -328,17 +368,41 @@ describe('Mic-E status text (vectors README, Mic-E)', () => {
   });
 });
 
+describe('round 4 rulings', () => {
+  it('refuses an information field over 256 bytes whatever the output, and counts bytes', () => {
+    const fits = Aprs.from('N0CALL').status('x'.repeat(255));
+    expect(fits.build().information.length).toBe(256);
+    for (const text of ['x'.repeat(256), 'é'.repeat(128)]) {
+      const b = Aprs.from('N0CALL').status(text);
+      expect(codeOf(() => b.build())).toBe('too-long');
+    }
+    expect(codeOf(() => encodeAx25({ source: 'N0CALL', data: { type: 'status', text: 'x'.repeat(256) } }))).toBe('too-long');
+  });
+
+  it('refuses text with a control character, a tab included', () => {
+    for (const text of ['a\tb', 'a\u0000b', 'a\u007fb', 'a\rb']) {
+      expect(codeOf(() => Aprs.from('N0CALL').status(text).build())).toBe('invalid-character');
+    }
+  });
+
+  it('warns of a control character in text, and a strict decoder rejects it', () => {
+    const line = 'N0CALL>APZ001:>a\tb';
+    expect(decodeTnc2(line).diagnostics.map(formatDiagnostic)).toEqual(['warning:control-character-in-text']);
+    expect(decodeTnc2(line, ParseOptions.strict).data.type).toBe('unrecognized');
+  });
+});
+
 describe('ambiguity cut (vectors rulings, G2)', () => {
   it('takes a value within 1e-6 of the box edge as on it', () => {
-    const line = Aprs.from('N0CALL').position(80.49, -72.75).ambiguity(1).toTnc2();
+    const line = Aprs.from('N0CALL').position(80.49, -72.75).symbol('//').ambiguity(1).toTnc2();
     expect(line.slice(line.indexOf(':') + 1)).toBe('!8029.4 N/07245.0 W/');
   });
 });
 
 describe('run 2 rulings', () => {
   it('writes a Mic-E comment that a / would join into an altitude after a space (E12)', () => {
-    const line = Aprs.from('N0CALL').micE(49.5, -72.75).comment('/{}').toTnc2();
-    expect(line.endsWith('` /{}')).toBe(true);
+    const line = Aprs.from('N0CALL').micE(49.5, -72.75).symbol('//').comment('/{}').toTnc2();
+    expect(line.endsWith("' /{}")).toBe(true);
     const back = decodeTnc2(line);
     if (back.data.type !== 'mic-e') throw new Error(back.data.type);
     expect(back.data.comment).toBe('/{}');
@@ -400,17 +464,19 @@ describe('1.0 API', () => {
   });
 
   it('keeps where a Mic-E altitude was written in the data', () => {
-    const built = Aprs.from('N0CALL').micE(49.5, -72.75).altitudeFeet(100).build();
+    const built = Aprs.from('N0CALL').micE(49.5, -72.75).symbol('//').altitudeFeet(100).build();
     if (built.data.type !== 'mic-e') throw new Error(built.data.type);
-    expect(built.data.altitudeInComment).toBe(true);
+    expect(built.data.altitudeInComment).toBeUndefined();
     const copy = encodeInformation({ ...built.data });
     expect(decodeUtf8(copy.information)).toBe(decodeUtf8(built.information));
     const decoded = decodeTnc2(built.toTnc2());
     if (decoded.data.type !== 'mic-e') throw new Error(decoded.data.type);
-    expect(decoded.data.altitudeInComment).toBe(true);
-    const metres = decodeTnc2(Aprs.from('N0CALL').micE(49.5, -72.75).altitudeM(100).toTnc2());
-    if (metres.data.type !== 'mic-e') throw new Error(metres.data.type);
-    expect(metres.data.altitudeInComment).toBeUndefined();
+    expect(decoded.data.altitudeInComment).toBeUndefined();
+    // Neutral data in whole feet that the Mic-E bytes do not hold exactly goes in a /A=, which decoded data then keeps.
+    const text = decodeTnc2(`N0CALL>${built.destination}:${decodeUtf8(encodeInformation({ ...built.data, altitudeFeet: 1000 }).information)}`);
+    if (text.data.type !== 'mic-e') throw new Error(text.data.type);
+    expect(text.data.altitudeInComment).toBe(true);
+    expect(packetToTnc2(text)).toBe(`N0CALL>${built.destination}:${decodeUtf8(encodeInformation({ ...built.data, altitudeFeet: 1000 }).information)}`);
   });
 
   it('writes a received packet back as received', () => {
@@ -443,15 +509,6 @@ describe('1.0 API', () => {
   });
 
   describe('refusal codes', () => {
-    const codeOf = (fn: () => unknown): RefusalCode => {
-      try {
-        fn();
-      } catch (e) {
-        if (e instanceof AprsEncodeError) return e.code;
-        throw e;
-      }
-      throw new Error('not refused');
-    };
     const info = (data: Parameters<typeof encodeInformation>[0]): (() => unknown) => () => encodeInformation(data);
     const sym = { table: '/', code: '>' };
 
@@ -497,9 +554,9 @@ describe('1.0 API', () => {
     });
 
     it('takes the last altitude setter whatever its unit, as a kept builder does', () => {
-      const p = decodeTnc2(Aprs.from('M0LTE').position(51, -1).altitudeFeet(1000).altitudeM(100).toTnc2());
+      const p = decodeTnc2(Aprs.from('M0LTE').position(51, -1).symbol('//').altitudeFeet(1000).altitudeM(100).toTnc2());
       expect(p.data).toMatchObject({ altitudeFeet: 328 });
-      const q = decodeTnc2(Aprs.from('M0LTE').position(51, -1).altitudeM(100).altitudeFeet(1000).toTnc2());
+      const q = decodeTnc2(Aprs.from('M0LTE').position(51, -1).symbol('//').altitudeM(100).altitudeFeet(1000).toTnc2());
       expect(q.data).toMatchObject({ altitudeFeet: 1000 });
     });
 

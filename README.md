@@ -10,7 +10,7 @@ An APRS (Automatic Packet Reporting System) encoder and decoder for TypeScript.
 - Every APRS symbol by name, with overlays; device identification from the APRS device database.
 - Zero runtime dependencies; ESM only; works in browsers and Node 20 and later. Bytes are `Uint8Array`.
 
-Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.1: every case passes.
+Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.2: every case passes.
 
 It is conformance tested against [aprs-vectors](https://github.com/packet-net/aprs-vectors), the language-neutral test suite shared with the sibling libraries: [aprs-cs](https://github.com/packet-net/aprs-cs) (C#), [aprs-rs](https://github.com/packet-net/aprs-rs) (Rust), [aprs-py](https://github.com/packet-net/aprs-py) (Python), [aprs-c](https://github.com/packet-net/aprs-c) (C) and [aprs-go](https://github.com/packet-net/aprs-go) (Go). The C# and Rust libraries were also compared with this one over a 6.9-million-packet APRS-IS capture.
 
@@ -115,7 +115,7 @@ console.log(station.ack('G4ABC', '7').toTnc2()); // M0LTE>APZ001::G4ABC    :ack7
 // Status, with a locator and symbol
 console.log(station.status('On the air').locator('IO91SX', Symbols.house).toTnc2()); // M0LTE>APZ001:>IO91SX/- On the air
 
-// An object, with a timestamp (objects always have one; it defaults to now)
+// An object, with a timestamp (objects always have one; the builder never reads the clock, so give one, `new Date()` for now)
 console.log(
   station
     .object('NET', 51.5, -0.1)
@@ -140,12 +140,14 @@ console.log(station.telemetryNames(['Battery', 'Temp']).toTnc2()); // M0LTE>APZ0
 
 // Telemetry, and a Mic-E position (which computes its destination address)
 console.log(station.telemetry(5, [199, 0, 255, 73, 123], '01101001').toTnc2()); // M0LTE>APZ001:T#005,199,000,255,073,123,01101001
-console.log(station.micE(51.5, -0.1234).symbol(Symbols.car).micEMessage('en-route').speedKnots(20).courseDegrees(90).toTnc2()); // M0LTE>UQ3PPP:`v_Dn v>/`
+console.log(station.micE(51.5, -0.1234).symbol(Symbols.car).micEMessage('en-route').speedKnots(20).courseDegrees(90).toTnc2()); // M0LTE>UQ3PPP:`v_Dn v>/'
 ```
 
-The builder takes values as an application has them: a course of 0 is unknown, as APRS has it (360 is north), so it is `000` in an uncompressed report, no course in Mic-E, and refused in a compressed report; `speedKmh()` and `altitudeM()` take km/h and metres beside `speedKnots()` and `altitudeFeet()` (a setter has the name of the field it fills), and weather may be given in Celsius (`temperatureC`) and millimetres (`rain1hMm`, `rain24hMm`, `rainMidnightMm`) instead of Fahrenheit and inches: the type refuses a value given in both units, and `build()` does too for a caller the type does not stop. Each value is rounded once, to the nearest step its field holds. A Mic-E altitude in metres goes in the Mic-E altitude bytes, whose unit is the metre; one in feet goes in a `/A=`, which the data records as `altitudeInComment` so encoding a copy of the data writes the same bytes. A telemetry sequence given as a number is 0-999.
+The builder takes values as an application has them: a course of 0 is unknown, as APRS has it (360 is north), so it is `000` in an uncompressed report, no course in Mic-E, and refused in a compressed report; `speedKmh()` and `altitudeM()` take km/h and metres beside `speedKnots()` and `altitudeFeet()` (a setter has the name of the field it fills), and weather may be given in Celsius (`temperatureC`) and millimetres (`rain1hMm`, `rain24hMm`, `rainMidnightMm`) instead of Fahrenheit and inches: the type refuses a value given in both units, and `build()` does too for a caller the type does not stop. Each value is rounded once, to the nearest step its field holds. A Mic-E altitude, in metres or feet, goes in the Mic-E altitude bytes, whose unit is the metre, rounded once to the nearest metre from the value given (1000 feet is 305 m); one outside -10000 to 743570 m is refused, not moved to a `/A=`. A telemetry sequence given as a number is 0-999.
 
-Anything the spec does not allow is refused when you build it, with an `AprsEncodeError` saying why: an address APRS-IS does not allow in the header, a weather value given in two units, message text over 67 characters, an object name with a trailing space, two data extensions at once. Free text is checked by decoding what was written, so a comment that would read back as something else (an altitude, a PHG code, a `!DAO!`) gets a `/` delimiter (or a space) in front if that fixes it, and is refused if not.
+The builder writes nothing you did not ask for, and never reads the clock. Left unset: messaging is off (`!`, or `/` with a timestamp, and the Mic-E type code `'`; call `.messaging()` for `` ` ``), the Mic-E message is off duty, there is no path, the destination is `APZ001` (Mic-E computes its own), and there is no ambiguity, compression, message ID, reply-ack or bulletin group. An object or a positionless weather report needs a timestamp and is refused as `missing-field` without one (pass `new Date()` to `timestamp(...)`, or to `weather(..., { at })`, for the time now). A position, object, item or Mic-E report needs a symbol and is refused as `invalid-symbol` without one; a weather report's symbol is `/_`. Telemetry bits left out are `00000000`; a sequence left out is `missing-field`.
+
+Anything the spec does not allow is refused when you build it, with an `AprsEncodeError` saying why: an address APRS-IS does not allow in the header, a weather value given in two units, message text over 67 characters, an object name with a trailing space, two data extensions at once, an information field over 256 bytes (`too-long`; the encoder counts the bytes it writes, number text and UTF-8 included), or text with a control character (a byte below 0x20, a tab and a line break included, or 0x7F: `invalid-character`). Free text is checked by decoding what was written, so a comment that would read back as something else (an altitude, a PHG code, a `!DAO!`) gets a `/` delimiter (or a space) in front if that fixes it, and is refused if not.
 
 ```ts
 import { Aprs, AprsEncodeError } from '@packet-net/pdn-aprs';
