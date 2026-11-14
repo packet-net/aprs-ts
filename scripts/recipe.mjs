@@ -257,7 +257,7 @@ export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
       return { packet: builderFor(recipe).build() };
     } catch (e) {
       if (e instanceof Unsupported) return { record: { n, result: 'unsupported', reason: e.message } };
-      if (isRefusal(e)) return { record: { n, result: 'refused', reason: e.message, refusal: refusalCode(e) } };
+      if (isRefusal(e)) return { record: { n, result: 'refused', reason: e.message, refusal: refusalCode(e), ...(e instanceof AprsEncodeError && e.informationSize ? { size: true } : {}) } };
       throw e;
     }
   }
@@ -277,7 +277,11 @@ export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
       if (other) return other;
       const refusals = results.filter((r) => r.result === 'refused');
       refusals.push({ n, result: 'refused', reason: `${twice.map((p) => p.join(' and ')).join(', ')} given together`, refusal: 'value-given-twice' });
-      return refusals.reduce((best, r) => (refusalRank(r.refusal) < refusalRank(best.refusal) ? r : best));
+      // A result refused only for the information field's size counts after value-given-twice.
+      const rank = (r) => (r.size ? Number.MAX_SAFE_INTEGER : refusalRank(r.refusal));
+      const best = refusals.reduce((b, r) => (rank(r) < rank(b) ? r : b));
+      const { size, ...record } = best;
+      return record;
     }
     const once = buildOnce(n, recipe);
     if (once.record) return once.record;

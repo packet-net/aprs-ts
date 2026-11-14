@@ -308,8 +308,30 @@ function lostKeys(a, b, out) {
   return out;
 }
 
+/**
+ * Leaves out what the data form leaves out: an empty string value is absent (vectors README, data
+ * form), except `reply_ack`, and an inner packet's `source` and `destination`, which are always
+ * written. Done in place with a stack, as the data can be nested thousands deep.
+ */
+function dropEmptyStrings(root) {
+  const stack = [root];
+  while (stack.length > 0) {
+    const x = stack.pop();
+    if (Array.isArray(x)) {
+      for (const v of x) if (v && typeof v === 'object') stack.push(v);
+    } else if (x && typeof x === 'object') {
+      for (const k of Object.keys(x)) {
+        const v = x[k];
+        if (v === '' && k !== 'reply_ack' && !((k === 'source' || k === 'destination') && 'data' in x)) delete x[k];
+        else if (v && typeof v === 'object') stack.push(v);
+      }
+    }
+  }
+}
+
 function encodeRecord(index, line) {
   const { n = index, data } = parseJson(line);
+  dropEmptyStrings(data);
   let own;
   try {
     own = fromNeutralData(data);

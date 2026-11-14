@@ -290,7 +290,7 @@ function encodeShaped(data: AprsData): EncodedInformation {
   // The size is the last check, on the bytes actually written: a record any other rule refuses
   // has been refused above, with that rule's code.
   if (chosen.binary.length > MAX_INFORMATION_BYTES)
-    refuse('too-long', `the information field is ${chosen.binary.length} bytes; at most ${MAX_INFORMATION_BYTES} are allowed`);
+    throw new AprsEncodeError(`the information field is ${chosen.binary.length} bytes; at most ${MAX_INFORMATION_BYTES} are allowed`, 'too-long', true);
   const information = binaryToBytes(chosen.binary);
   return chosen.destination !== undefined ? { information, destination: chosen.destination } : { information };
 }

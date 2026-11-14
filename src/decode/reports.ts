@@ -352,6 +352,7 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
   let altitudeFeet: number | undefined;
   let extension: ExtensionFound | undefined;
   let extensionAfterLocator = false;
+  let spacelessExtension = false;
   // Where a later altitude was taken out of the text: a !DAO! is never read across it.
   let join: number | undefined;
   const altFirst = /^([!-{]{3})\}/.exec(text);
@@ -363,11 +364,13 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     // read first, so its bytes are never taken for an altitude later in the text (`0PH}` in
     // `PHG3330PH}`).
     const loc = MIC_E_LOCATOR.exec(text);
-    const at = loc && text[loc[0].length] === ' ' ? loc[0].length + 1 : 0;
+    // With the space missing (`missing-space-after-locator`) it is read as if it were there.
+    const at = loc ? (text[loc[0].length] === ' ' ? loc[0].length + 1 : loc[0].length) : 0;
     extension = extensionAt(text, at);
     if (extension) {
       text = text.slice(0, at) + text.slice(at + extension.length);
       extensionAfterLocator = at > 0;
+      if (loc && at === loc[0].length) spacelessExtension = true;
     }
     // A locator at the start is taken before a later altitude is looked for, and the altitude
     // search never uses its bytes (vectors rulings).
@@ -409,7 +412,7 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     if (text.length > 0) {
       if (text[0] === ' ') text = text.slice(1);
       else ctx.tolerate('missing-space-after-locator');
-    }
+    } else if (spacelessExtension) ctx.tolerate('missing-space-after-locator');
   }
   // A PHG or RNG is straight after the type code only where it is so as sent: one that reaches
   // there once a later altitude is lifted is late (vectors mic-e/an-rng-reached-only-by-lifting-an-altitude-is-late).
