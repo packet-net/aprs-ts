@@ -812,6 +812,11 @@ interface WeatherFieldOptions {
   positionless: boolean;
   /** After a compressed position, whose cs bytes are where the wind goes. */
   compressed?: boolean;
+  /**
+   * Where trailing elements a positioned report lifts first (base-91 telemetry, a `!DAO!`) start:
+   * the weather text ends there, as it does at the end of the information field.
+   */
+  endsAt?: readonly number[];
 }
 
 /**
@@ -924,7 +929,7 @@ function parseWeatherFields(ctx: DecodeContext, s: string, j: number, options: W
         // followed by the end of the field or by a defined field it goes on to read. Anything
         // else keeps the older rule: the field at its width, the rest left for the comment.
         const after = j + 1 + run.length;
-        if (after >= s.length || definedFieldAt(s, after, new Set(seen).add(key), windKnown, options.positionless)) {
+        if (after >= s.length || options.endsAt?.includes(after) || definedFieldAt(s, after, new Set(seen).add(key), windKnown, options.positionless)) {
           defects.push('out-of-range-value');
           seen.add(key);
           j = after;
@@ -1140,7 +1145,8 @@ function decodeExtensionAndComment(ctx: DecodeContext, s: string, i: number, pos
           i += 8;
         }
       }
-      if (pos.symbol.code === '@' && (pos.symbol.table === '/' || pos.symbol.table === '\\')) {
+      // An overlay (0-9, A-Z) stands for the alternate table, so an overlaid @ is the hurricane symbol.
+      if (pos.symbol.code === '@' && /^[/\\0-9A-Z]$/.test(pos.symbol.table)) {
         const storm = parseStorm(s.slice(i));
         if (storm) {
           f.storm = storm.storm;
@@ -1233,7 +1239,9 @@ function decodeWeatherAfterPosition(ctx: DecodeContext, s: string, i: number, po
     if (spd !== undefined) wind.speedMph = spd;
     i += 7;
   }
-  const parsed = parseWeatherFields(ctx, s, i, { wind, positionless: false, compressed: pos.compressed });
+  // The weather text ends where a trailing element lifted first begins (telemetry, a !DAO!).
+  const endsAt = liftTelemetryAndDao(s.slice(i)).removed.map(([a]) => a + i);
+  const parsed = parseWeatherFields(ctx, s, i, { wind, positionless: false, compressed: pos.compressed, endsAt });
   const tail = weatherTail(ctx, parsed.weather, s.slice(parsed.end), true, (dao) => applyDao(ctx, f, pos, dao));
   f.weather = parsed.weather;
   if (pos.compressed && pos.csBlank && !windFromCs) {

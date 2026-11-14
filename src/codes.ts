@@ -235,6 +235,7 @@ export type RefusalCode =
   | 'invalid-message-id'
   | 'padding-space'
   | 'too-long'
+  | 'information-field-too-long'
   | 'malformed'
   | 'invalid-character'
   | 'text-reads-as-field'
@@ -263,7 +264,8 @@ export const REFUSAL_MEANINGS: Readonly<Record<RefusalCode, string>> = {
   'invalid-name': "An object or item name is the wrong length or holds a character a name cannot.",
   'invalid-message-id': "A message ID is empty, over 5 characters or not letters and digits, or an ack or reject carries the wrong kind of ID.",
   'padding-space': "Text starts or ends with a space that would be read back as padding (an object name, a capability value).",
-  'too-long': "Free text or a list is longer than its field allows (message text over 67 characters, a project title over 23, more than 13 names, more than 5 analog values), or the information field as written is over 256 bytes (APRS12c ch. 3).",
+  'too-long': "Free text or a list is longer than its field allows (message text over 67 characters, a project title over 23, more than 13 names, more than 5 analog values).",
+  'information-field-too-long': "The information field as written is over 256 bytes (APRS12c ch. 3), and nothing else is wrong with the data: checked last, on the bytes written.",
   'malformed': "Text in a fixed-form field is not that form: a locator, a bit sense, telemetry bits, signpost text, a capability token, a weather extra field, too few telemetry values.",
   'invalid-character': "Free text holds a character its field cannot carry: a control character (a byte below 0x20, a line break included, or 0x7F), a `{` in message-like text, or a character outside printable ASCII where only that is allowed.",
   'text-reads-as-field': "Free text would read back as a structured element (an altitude, a `!DAO!`, telemetry, a frequency, PHG/RNG/DFS, a timestamp or locator, a Mic-E device suffix, a weather field), and no clean form avoids it.",

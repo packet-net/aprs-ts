@@ -290,7 +290,7 @@ function encodeShaped(data: AprsData): EncodedInformation {
   // The size is the last check, on the bytes actually written: a record any other rule refuses
   // has been refused above, with that rule's code.
   if (chosen.binary.length > MAX_INFORMATION_BYTES)
-    throw new AprsEncodeError(`the information field is ${chosen.binary.length} bytes; at most ${MAX_INFORMATION_BYTES} are allowed`, 'too-long', true);
+    throw new AprsEncodeError(`the information field is ${chosen.binary.length} bytes; at most ${MAX_INFORMATION_BYTES} are allowed`, 'information-field-too-long');
   const information = binaryToBytes(chosen.binary);
   return chosen.destination !== undefined ? { information, destination: chosen.destination } : { information };
 }
@@ -399,7 +399,7 @@ export function encodeAx25(p: PacketToEncode): Uint8Array {
   });
 }
 
-/** Wraps an AX.25 frame for a KISS TNC: FEND, a data command on `port`, escaping, FEND. Throws RangeError unless `port` is an integer 0-15. */
+/** Wraps an AX.25 frame for a KISS TNC: FEND, a data command on `port`, escaping, FEND. Not an encoder: the frame is passed through as it stands, with no size check. Throws RangeError unless `port` is an integer 0-15. */
 export function wrapKiss(frame: Uint8Array, port = 0): Uint8Array {
   if (!Number.isInteger(port) || port < 0 || port > 15) throw new RangeError('a KISS port is 0-15');
   const out: number[] = [0xc0, (port & 0x0f) << 4];

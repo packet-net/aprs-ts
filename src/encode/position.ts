@@ -494,7 +494,7 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
   if (!f.compressed && f.dfBearing && f.storm) flag('extension-conflict', 'DF and storm data both extend the course/speed');
   if (!f.compressed && f.courseDegrees !== undefined && f.area === undefined && f.symbol.table === '\\' && f.symbol.code === 'l') flag('symbol-mismatch', 'course/speed on the area symbol (\\l) would read back as an area');
   if (f.dfBearing && !(f.symbol.table === '/' && f.symbol.code === '\\')) flag('symbol-mismatch', 'a DF bearing needs the DF symbol (/\\)');
-  if (f.storm && !(f.symbol.code === '@' && (f.symbol.table === '/' || f.symbol.table === '\\'))) flag('symbol-mismatch', 'storm data needs a hurricane symbol (/@ or \\@)');
+  if (f.storm && !(f.symbol.code === '@' && /^[/\\0-9A-Z]$/.test(f.symbol.table))) flag('symbol-mismatch', 'storm data needs a hurricane symbol (/@, \\@ or an overlaid @)');
   if (f.signpost !== undefined && !(f.symbol.table === '\\' && f.symbol.code === 'm')) flag('symbol-mismatch', 'a signpost needs the signpost symbol (\\m)');
   if (f.area && !(f.symbol.table === '\\' && f.symbol.code === 'l')) flag('symbol-mismatch', 'an area object needs the area symbol (\\l)');
 

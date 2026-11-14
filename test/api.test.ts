@@ -369,14 +369,26 @@ describe('Mic-E status text (vectors README, Mic-E)', () => {
 });
 
 describe('round 4 rulings', () => {
-  it('refuses an information field over 256 bytes whatever the output, and counts bytes', () => {
+  it('refuses an encoded information field over 256 bytes with its own code, and counts bytes', () => {
     const fits = Aprs.from('N0CALL').status('x'.repeat(255));
     expect(fits.build().information.length).toBe(256);
     for (const text of ['x'.repeat(256), 'é'.repeat(128)]) {
       const b = Aprs.from('N0CALL').status(text);
-      expect(codeOf(() => b.build())).toBe('too-long');
+      expect(codeOf(() => b.build())).toBe('information-field-too-long');
     }
-    expect(codeOf(() => encodeAx25({ source: 'N0CALL', data: { type: 'status', text: 'x'.repeat(256) } }))).toBe('too-long');
+    expect(codeOf(() => encodeAx25({ source: 'N0CALL', data: { type: 'status', text: 'x'.repeat(256) } }))).toBe('information-field-too-long');
+  });
+
+  it('builds with the defaults the library has: five empty analog channels, no message or bulletin text', () => {
+    expect(Aprs.from('N0CALL').telemetry(1).toTnc2()).toBe('N0CALL>APZ001:T#001,,,,,,00000000');
+    expect(Aprs.from('N0CALL').message('M0LTE').toTnc2()).toBe('N0CALL>APZ001::M0LTE    :');
+    expect(Aprs.from('N0CALL').bulletin('1').toTnc2()).toBe('N0CALL>APZ001::BLN1     :');
+    expect(codeOf(() => Aprs.from('N0CALL').telemetry().build())).toBe('missing-field');
+  });
+
+  it('refuses a telemetry sequence that starts MIC and is not MIC as malformed', () => {
+    const data = { type: 'telemetry', sequence: 'MIC1', analog: [1, 2, 3, 4, 5], bits: '00000000' } as const;
+    expect(codeOf(() => encodeInformation(data))).toBe('malformed');
   });
 
   it('refuses text with a control character, a tab included', () => {
@@ -512,8 +524,8 @@ describe('1.0 API', () => {
     const info = (data: Parameters<typeof encodeInformation>[0]): (() => unknown) => () => encodeInformation(data);
     const sym = { table: '/', code: '>' };
 
-    it('lists 26 codes with a meaning each', () => {
-      expect(REFUSAL_CODES).toHaveLength(26);
+    it('lists 27 codes with a meaning each', () => {
+      expect(REFUSAL_CODES).toHaveLength(27);
       for (const c of REFUSAL_CODES) expect(REFUSAL_MEANINGS[c].length).toBeGreaterThan(0);
     });
 

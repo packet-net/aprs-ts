@@ -422,7 +422,10 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
   // A PHG or RNG is straight after the type code only where it is so as sent: one that reaches
   // there once a later altitude is lifted is late (vectors mic-e/an-rng-reached-only-by-lifting-an-altitude-is-late).
   const startJoined = !extension && !loc && join !== undefined && (extensionAt(text, 0)?.length ?? 0) > join;
-  const { lifted } = liftMicEComment(ctx, text, pos.symbol, extension, pre, !startJoined);
+  // The same holds when a !DAO! or base-91 telemetry taken out of the start is what brings it there
+  // (vectors mic-e/phg-reached-only-by-lifting-a-dao-is-late).
+  const startLifted = !extension && !loc && pre.removed.some(([a]) => a === 0);
+  const { lifted } = liftMicEComment(ctx, text, pos.symbol, extension, pre, !startJoined && !startLifted);
   // The !DAO! is structure, so it is judged before the text's encoding.
   applyDao(ctx, f, pos, lifted.dao);
   applyLiftedTo(ctx, f, lifted);

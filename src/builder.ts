@@ -260,7 +260,7 @@ export class PacketBuilder {
   }
 
   /** A message to `addressee`. */
-  message(addressee: string, text: string): MessageBuilder {
+  message(addressee: string, text = ''): MessageBuilder {
     return new MessageBuilder(this.header, addressee, text);
   }
 
@@ -275,7 +275,7 @@ export class PacketBuilder {
   }
 
   /** A bulletin (`id` a digit) or announcement (`id` a letter), optionally to a group. */
-  bulletin(id: string, text: string, group = ''): DataBuilder {
+  bulletin(id: string, text = '', group = ''): DataBuilder {
     return new DataBuilder(this.header, { type: 'bulletin', addressee: `BLN${id}${group}`, text });
   }
 
@@ -288,9 +288,14 @@ export class PacketBuilder {
    * A telemetry report: sequence, five analog values and eight bits (`'01101001'`, B1 first;
    * `'00000000'` when left out). The sequence is a number, 0-999, written in three digits; left out
    * it is refused as `missing-field`, and anything else out of range is refused when the packet is
-   * built, not wrapped (vectors rulings, B6). Text sequences need hand-built data.
+   * built, not wrapped (vectors rulings, B6). With no analog values given the five channels are
+   * empty. Text sequences need hand-built data.
    */
-  telemetry(sequence: number, analog: readonly (number | null)[], bits = '00000000'): TelemetryBuilder {
+  telemetry(
+    sequence?: number,
+    analog: readonly (number | null)[] = [null, null, null, null, null],
+    bits = '00000000',
+  ): TelemetryBuilder {
     return new TelemetryBuilder(this.header, sequence, analog, bits);
   }
 
@@ -589,6 +594,7 @@ export class ItemBuilder extends ReportBuilder<ItemBuilder> {
 export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
   private messageValue: MicEMessage = 'off-duty';
   private typeCodeValue: string | undefined = "'";
+  private deviceSuffixValue: string | undefined;
   private locatorValue?: string;
   private oldValue = false;
 
@@ -605,6 +611,17 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
   /** Whether the sender can receive messages: the `` ` `` (yes) or `'` (no, the default) type code. */
   messaging(capable = true): MicEBuilder {
     this.typeCodeValue = capable ? '`' : "'";
+    return this;
+  }
+
+  /**
+   * The device type: the type code before the status text (`` ` ``, `'`, `>`, `]` or a space) and
+   * the device suffix at its end (`_%`, `=`, ...). A type code given here replaces what
+   * `messaging()` chose; a suffix is written only after a type code.
+   */
+  deviceType(typeCode?: string, suffix?: string): MicEBuilder {
+    if (typeCode !== undefined) this.typeCodeValue = typeCode;
+    this.deviceSuffixValue = suffix;
     return this;
   }
 
@@ -631,6 +648,7 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
       markMicEAltitudeBytesOnly(data);
     }
     if (this.typeCodeValue !== undefined) data.typeCode = this.typeCodeValue;
+    if (this.deviceSuffixValue !== undefined) data.deviceSuffix = this.deviceSuffixValue;
     if (this.locatorValue !== undefined) data.locator = this.locatorValue;
     if (this.oldValue) data.oldData = true;
     return built(this.header, data);
@@ -742,7 +760,7 @@ export class TelemetryBuilder {
 
   constructor(
     private readonly header: Header,
-    private readonly sequence: number,
+    private readonly sequence: number | undefined,
     private readonly analog: readonly (number | null)[],
     private readonly bits: string,
   ) {}

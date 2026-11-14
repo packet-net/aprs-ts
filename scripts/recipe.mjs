@@ -12,10 +12,14 @@
  *   `{ n, result: 'refused' | 'unsupported', reason, refusal? }`.
  */
 export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
-  /** An encoder refusal, or a builder declining a value (a symbol it cannot make, say). */
-  function refusalCode(e) {
-    // A RangeError is the builder's symbol constructor declining a symbol.
-    return e instanceof AprsEncodeError ? e.code : 'invalid-symbol';
+  /**
+   * The refusal record for an error: the library's own (an AprsEncodeError), or, for a RangeError,
+   * the tool's reading of the builder's symbol constructor declining a symbol, which the tool marks
+   * `via: "tool"` because the library gave no refusal code.
+   */
+  function refusalRecord(n, e) {
+    if (e instanceof AprsEncodeError) return { n, result: 'refused', reason: e.message, refusal: e.code };
+    return { n, result: 'refused', reason: e.message, refusal: 'invalid-symbol', via: 'tool' };
   }
 
   function isRefusal(e) {
@@ -115,7 +119,11 @@ export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
     }
     if (args.ambiguity !== undefined) b.ambiguity(args.ambiguity);
     if (args.dao === true) b.dao();
-    if (args.telemetry !== undefined) b.telemetry(args.telemetry.sequence, args.telemetry.analog ?? [], args.telemetry.digital);
+    if (args.telemetry !== undefined) {
+      const t = args.telemetry;
+      if (t.sequence === undefined || t.analog === undefined) unsupported('telemetry', 'comment telemetry takes a sequence and analog values');
+      b.telemetry(t.sequence, t.analog, t.digital);
+    }
     if (report !== 'mic-e') {
       if (args.phg !== undefined) b.phg(args.phg.power, args.phg.height, args.phg.gain, args.phg.directivity, args.phg.beacons_per_hour);
       if (args.range_miles !== undefined) b.rangeMiles(args.range_miles);
@@ -169,9 +177,10 @@ export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
         return b;
       }
       case 'mic-e': {
-        checkKeys(a, new Set(['latitude', 'longitude', 'mic_e_message', 'messaging', ...POSITIONED_OPTIONS]), report);
+        checkKeys(a, new Set(['latitude', 'longitude', 'mic_e_message', 'messaging', 'type_code', 'device_suffix', ...POSITIONED_OPTIONS]), report);
         const b = positioned(p.micE(a.latitude, a.longitude), a, report);
         if (a.mic_e_message !== undefined) b.micEMessage(a.mic_e_message);
+        if (a.type_code !== undefined || a.device_suffix !== undefined) b.deviceType(a.type_code, a.device_suffix);
         // The type code says whether the sender takes messages: ` if so, ' if not; left alone when the recipe is silent.
         if (a.messaging !== undefined) b.messaging(a.messaging === true);
         return b;
@@ -198,7 +207,7 @@ export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
       }
       case 'message': {
         checkKeys(a, new Set(['addressee', 'text', 'message_id', 'reply_ack']), report);
-        const b = p.message(a.addressee, a.text ?? '');
+        const b = p.message(a.addressee, a.text);
         if (a.message_id !== undefined) b.messageId(a.message_id);
         if (a.reply_ack !== undefined) b.replyAck(a.reply_ack);
         return b;
@@ -209,7 +218,7 @@ export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
         return report === 'ack' ? p.ack(a.addressee, a.message_id) : p.reject(a.addressee, a.message_id);
       case 'bulletin':
         checkKeys(a, new Set(['id', 'group', 'text']), report);
-        return p.bulletin(a.id, a.text ?? '', a.group ?? '');
+        return p.bulletin(a.id, a.text, a.group);
       case 'status': {
         checkKeys(a, new Set(['text', 'timestamp', 'locator', 'symbol', 'beam']), report);
         const b = p.status(a.text);
@@ -229,8 +238,7 @@ export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
       }
       case 'telemetry': {
         checkKeys(a, new Set(['sequence', 'analog', 'bits', 'comment']), report);
-        // The builder takes the analog values as an argument: with none given, the five channels are empty.
-        const b = p.telemetry(a.sequence, a.analog ?? [null, null, null, null, null], a.bits);
+        const b = p.telemetry(a.sequence, a.analog, a.bits);
         if (a.comment !== undefined) b.comment(a.comment);
         return b;
       }
@@ -257,7 +265,7 @@ export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
       return { packet: builderFor(recipe).build() };
     } catch (e) {
       if (e instanceof Unsupported) return { record: { n, result: 'unsupported', reason: e.message } };
-      if (isRefusal(e)) return { record: { n, result: 'refused', reason: e.message, refusal: refusalCode(e), ...(e instanceof AprsEncodeError && e.informationSize ? { size: true } : {}) } };
+      if (isRefusal(e)) return { record: refusalRecord(n, e) };
       throw e;
     }
   }
@@ -276,12 +284,10 @@ export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
       const other = results.find((r) => r.result === 'unsupported');
       if (other) return other;
       const refusals = results.filter((r) => r.result === 'refused');
-      refusals.push({ n, result: 'refused', reason: `${twice.map((p) => p.join(' and ')).join(', ')} given together`, refusal: 'value-given-twice' });
-      // A result refused only for the information field's size counts after value-given-twice.
-      const rank = (r) => (r.size ? Number.MAX_SAFE_INTEGER : refusalRank(r.refusal));
-      const best = refusals.reduce((b, r) => (rank(r) < rank(b) ? r : b));
-      const { size, ...record } = best;
-      return record;
+      // The builder takes one unit per setter, so the tool itself makes this refusal (via: "tool").
+      // A result refused for the information field's size ranks after it, as in the order.
+      refusals.push({ n, result: 'refused', reason: `${twice.map((p) => p.join(' and ')).join(', ')} given together`, refusal: 'value-given-twice', via: 'tool' });
+      return refusals.reduce((b, r) => (refusalRank(r.refusal) < refusalRank(b.refusal) ? r : b));
     }
     const once = buildOnce(n, recipe);
     if (once.record) return once.record;

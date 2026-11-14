@@ -12,17 +12,10 @@ export class AprsEncodeError extends Error {
   /** The reason as a code a program can act on; the message is for people and is not stable. */
   readonly code: RefusalCode;
 
-  /**
-   * True for a `too-long` that is for the information field's 256 bytes: it is given only when no
-   * other code applies. A field over its own limit (message text over 67, say) is not this.
-   */
-  readonly informationSize: boolean;
-
-  constructor(message: string, code: RefusalCode = 'does-not-read-back', informationSize = false) {
+  constructor(message: string, code: RefusalCode = 'does-not-read-back') {
     super(message);
     this.name = 'AprsEncodeError';
     this.code = code;
-    this.informationSize = informationSize;
   }
 }
 
@@ -45,6 +38,7 @@ const REFUSAL_ORDER: readonly RefusalCode[] = [
   'extension-conflict', 'field-not-allowed', 'symbol-mismatch', 'missing-field', 'value-given-twice',
   'text-reads-as-field',
   'does-not-read-back',
+  'information-field-too-long',
 ];
 
 /** Where a code sits in the reporting order; a code outside it comes last. */
