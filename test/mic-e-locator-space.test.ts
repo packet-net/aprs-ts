@@ -24,3 +24,11 @@ describe('a locator missing its space before a PHG or RNG', () => {
     expect(codes(' PHG3330 24PH}#SlW1=')).not.toContain('missing-space-after-locator');
   });
 });
+
+describe('the comment after a PHG that follows a spaceless locator', () => {
+  it('keeps a second leading space and writes it back after a slash', () => {
+    const line = "N0CALL>SUSPU4:'C=?] \u001c#S]IO91/GPHG3330  W_c220s004g024PH}#SlW1=";
+    const p = decodeTnc2(line);
+    expect(p.data).toMatchObject({ comment: ' W_c220s004g02#SlW1' });
+  });
+});

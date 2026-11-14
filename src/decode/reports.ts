@@ -412,7 +412,8 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     // A PHG or RNG straight after the locator means its space is missing, whatever follows it (a
     // space after the extension, or an altitude, base-91 telemetry or !DAO! lifted out of the text).
     if (spacelessExtension) {
-      if (text[0] === ' ') text = text.slice(1);
+      // The extension is already out of the text, so a space now at its start is the comment's
+      // own leading delimiter, dropped once with the rest (not the locator's missing space).
       ctx.tolerate('missing-space-after-locator');
     } else if (text.length > 0) {
       if (text[0] === ' ') text = text.slice(1);
