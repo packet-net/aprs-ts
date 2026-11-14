@@ -575,7 +575,7 @@ function fromNeutralLevel(d: J): AprsData {
       opt(o, 'text', d.text);
       break;
     case 'telemetry':
-      o.sequence = d.sequence ?? '';
+      opt(o, 'sequence', d.sequence);
       o.analog = d.analog ?? [];
       opt(o, 'bits', d.bits);
       opt(o, 'comment', d.comment);

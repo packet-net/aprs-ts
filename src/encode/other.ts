@@ -160,7 +160,7 @@ export function encodeStatus(d: StatusReport): string {
     }
     if (text.length > 0 || d.beam) out += ' ';
   } else if (d.symbol) {
-    flag('field-not-allowed', 'a status symbol goes with a locator');
+    flag('missing-field', 'a status symbol goes with a locator');
   }
   out += freeText(text, 'status text');
   if (d.beam) {

@@ -683,7 +683,8 @@ export class MessageBuilder {
 /** A status report. */
 export class StatusBuilder {
   private timestampValue?: AprsTimestamp;
-  private locatorValue?: { locator: string; symbol: AprsSymbol };
+  private locatorValue?: string;
+  private symbolValue?: AprsSymbol;
   private beamValue?: { headingCode: string; powerCode: string };
 
   constructor(
@@ -697,9 +698,20 @@ export class StatusBuilder {
     return this;
   }
 
-  /** A Maidenhead locator and a symbol, in place of a timestamp. */
-  locator(locator: string, symbol: AprsSymbol | string): StatusBuilder {
-    this.locatorValue = { locator: locator.toUpperCase(), symbol: asSymbol(symbol) };
+  /**
+   * A Maidenhead locator, in place of a timestamp, and optionally its symbol. A locator and a
+   * symbol go together: either one given without the other is refused when the packet is built
+   * (`missing-field`).
+   */
+  locator(locator: string, symbol?: AprsSymbol | string): StatusBuilder {
+    this.locatorValue = locator.toUpperCase();
+    if (symbol !== undefined) this.symbolValue = asSymbol(symbol);
+    return this;
+  }
+
+  /** The symbol that goes with a locator. */
+  symbol(symbol: AprsSymbol | string): StatusBuilder {
+    this.symbolValue = asSymbol(symbol);
     return this;
   }
 
@@ -712,10 +724,8 @@ export class StatusBuilder {
   build(): BuiltPacket {
     const data: Mutable<Extract<AprsData, { type: 'status' }>> = { type: 'status' };
     if (this.timestampValue) data.timestamp = this.timestampValue;
-    if (this.locatorValue) {
-      data.locator = this.locatorValue.locator;
-      data.symbol = this.locatorValue.symbol;
-    }
+    if (this.locatorValue !== undefined) data.locator = this.locatorValue;
+    if (this.symbolValue !== undefined) data.symbol = this.symbolValue;
     if (this.beamValue) data.beam = this.beamValue;
     if (this.text !== undefined && this.text.length > 0) data.text = this.text;
     return built(this.header, data);

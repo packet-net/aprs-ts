@@ -60,12 +60,7 @@ const MAX_INFORMATION_BYTES = 256;
 
 function attempt(data: AprsData, mode: CommentMode): Attempt {
   return collect(() => {
-    const a = attemptOnce(data, mode);
-    // The size is measured on the fields as given, so a fault later in the reporting order does
-    // not hide it: a field left out makes no bytes, a malformed one the bytes it was given.
-    if (a.binary.length > MAX_INFORMATION_BYTES)
-      flag('too-long', `the information field is ${a.binary.length} bytes; at most ${MAX_INFORMATION_BYTES} are allowed`);
-    return a;
+    return attemptOnce(data, mode);
   });
 }
 
@@ -292,6 +287,10 @@ function encodeShaped(data: AprsData): EncodedInformation {
     }
   }
   if (problems.length > 0) refuse(firstRefusal(problems).code, `it would not read back the same: ${problems.map((p) => p.text).join('; ')}`);
+  // The size is the last check, on the bytes actually written: a record any other rule refuses
+  // has been refused above, with that rule's code.
+  if (chosen.binary.length > MAX_INFORMATION_BYTES)
+    refuse('too-long', `the information field is ${chosen.binary.length} bytes; at most ${MAX_INFORMATION_BYTES} are allowed`);
   const information = binaryToBytes(chosen.binary);
   return chosen.destination !== undefined ? { information, destination: chosen.destination } : { information };
 }

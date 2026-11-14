@@ -147,7 +147,7 @@ The builder takes values as an application has them: a course of 0 is unknown, a
 
 The builder writes nothing you did not ask for, and never reads the clock. Left unset: messaging is off (`!`, or `/` with a timestamp, and the Mic-E type code `'`; call `.messaging()` for `` ` ``), the Mic-E message is off duty, there is no path, the destination is `APZ001` (Mic-E computes its own), and there is no ambiguity, compression, message ID, reply-ack or bulletin group. An object or a positionless weather report needs a timestamp and is refused as `missing-field` without one (pass `new Date()` to `timestamp(...)`, or to `weather(..., { at })`, for the time now). A position, object, item or Mic-E report needs a symbol and is refused as `invalid-symbol` without one; a weather report's symbol is `/_`. Telemetry bits left out are `00000000`; a sequence left out is `missing-field`.
 
-Anything the spec does not allow is refused when you build it, with an `AprsEncodeError` saying why: an address APRS-IS does not allow in the header, a weather value given in two units, message text over 67 characters, an object name with a trailing space, two data extensions at once, an information field over 256 bytes (`too-long`; the encoder counts the bytes it writes, number text and UTF-8 included), or text with a control character (a byte below 0x20, a tab and a line break included, or 0x7F: `invalid-character`). Free text is checked by decoding what was written, so a comment that would read back as something else (an altitude, a PHG code, a `!DAO!`) gets a `/` delimiter (or a space) in front if that fixes it, and is refused if not.
+Anything the spec does not allow is refused when you build it, with an `AprsEncodeError` saying why: an address APRS-IS does not allow in the header, a weather value given in two units, message text over 67 characters, an object name with a trailing space, two data extensions at once, an information field over 256 bytes (`too-long`; the size is the last check, on the bytes actually written, number text and UTF-8 included, so a record anything else refuses gets that refusal), or text with a control character (a byte below 0x20, a tab and a line break included, or 0x7F: `invalid-character`). Free text is checked by decoding what was written, so a comment that would read back as something else (an altitude, a PHG code, a `!DAO!`) gets a `/` delimiter (or a space) in front if that fixes it, and is refused if not.
 
 ```ts
 import { Aprs, AprsEncodeError } from '@packet-net/pdn-aprs';
@@ -223,6 +223,8 @@ console.log(identifyTocall('APDW18')?.model); // DireWolf
 ## Conformance
 
 The conformance vectors are a git submodule at `vectors/`. The test suite runs every case with every check the vectors' README defines (the lenient result, the strict result, the single-tolerance check, re-encoding, and the encode cases), one test per check per case, and every case passes. A check this implementation could not pass would be listed in `test/known-differences.json` with the reason and skipped; the list is empty.
+
+The vectors' build cases (builder recipes, `cases/builder.json`) run through the same recipe mapping as the dump tool's build mode, `scripts/recipe.mjs`, against `src/` in the tests and `dist/` in the dump tool.
 
 The vectors' neutral form is not part of the public API: the tests and `scripts/diff-dump.mjs` read it from `src/neutral.ts` and `dist/neutral.js`.
 
