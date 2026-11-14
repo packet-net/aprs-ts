@@ -14,7 +14,7 @@ Mic-E altitude. The builder writes an altitude, given in feet or metres, in the 
 
 Builder defaults. A builder never reads the clock: an object or positionless weather report built with no timestamp is `missing-field` (pass `new Date()` to `timestamp(...)` or to `weather(..., { at })` for the time now), and neutral positionless weather data with no timestamp is `missing-field` rather than `invalid-timestamp`. A position, object, item or Mic-E report built with no symbol is `invalid-symbol`; a weather report's symbol is `/_`. Messaging is off unless said: a Mic-E report without `.messaging()` gets the type code `'`. `telemetry(sequence, analog, bits)` takes `bits` as optional (`00000000`), and a sequence left out is `missing-field`. The other defaults are unchanged and now written down: no path, destination `APZ001`, no ambiguity, no compression, no message ID, reply-ack or group, an object or item alive, metadata addressed to the sending station, Mic-E speed 0.
 
-The dump tool passes only the keys a recipe gives and never fills one in, so the builder's own defaults show; a builder refusal is a `refused` record,; a telemetry recipe with no analog values no longer crashes it (its five channels are empty). The README says 1.2 and lists the builder defaults.
+The dump tool passes only the keys a recipe gives and never fills one in, so the builder's own defaults show; a builder refusal is a `refused` record; a telemetry recipe with no analog values no longer crashes it (its five channels are empty). The README says 1.2 and lists the builder defaults.
 
 ### Breaking changes for callers
 
