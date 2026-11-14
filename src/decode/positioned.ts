@@ -664,7 +664,7 @@ function removeRanges(s: string, ranges: readonly [number, number][]): string {
 export function liftTelemetryAndDao(
   s: string,
   joins: readonly number[] = [],
-): { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; cuts: number[] } {
+): { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; cuts: number[]; removed: readonly [number, number][] } {
   const tel = findCommentTelemetry(s);
   let dao: DaoFound | undefined;
   for (let p = s.length - 5; p >= 0; p--) {
@@ -686,7 +686,11 @@ export function liftTelemetryAndDao(
     cuts.push(a - removed);
     removed += b - a;
   }
-  const out: { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; cuts: number[] } = { rest: removeRanges(s, ranges), cuts };
+  const out: { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; cuts: number[]; removed: readonly [number, number][] } = {
+    rest: removeRanges(s, ranges),
+    cuts,
+    removed: ranges,
+  };
   if (tel) out.telemetry = tel.telemetry;
   if (dao) out.dao = dao;
   return out;
@@ -834,6 +838,29 @@ function isLetter(c: string | undefined): boolean {
 }
 
 /**
+ * Whether a weather field this library defines, not already read (`seen`), with a value, starts at
+ * `k`: the field the main loop would read there.
+ */
+function definedFieldAt(s: string, k: number, seen: ReadonlySet<string>, windKnown: boolean, positionless: boolean): boolean {
+  const letter = s[k]!;
+  const width = WEATHER_WIDTH[letter];
+  if (width === undefined) return false;
+  let key = letter;
+  if (letter === 's') key = !seen.has('s:wind') && (seen.has('c') || (positionless && !windKnown)) ? 's:wind' : 's:snow';
+  if (letter === 'l') key = 'L';
+  if (seen.has(key)) return false;
+  if (letter === 'c' && windKnown) return false;
+  if (key === 's:snow') {
+    const v = s.slice(k + 1, k + 4);
+    if (/^[0-9.]{3}$/.test(v) && /[0-9]/.test(v) && !/\..*\./.test(v)) return true;
+    if (v === '   ') return true;
+    const dots = /^\.{1,3}/.exec(v)?.[0];
+    return dots !== undefined && !(dots.length < 3 && isDigit(v[dots.length]));
+  }
+  return weatherValueRun(s, k + 1, width, letter === 't').length > 0;
+}
+
+/**
  * Parses the run of weather fields from `j`, and reports what it finds in reading order: for a
  * position, object or item report the wind first, where the `DDD/SSS` extension belongs (missing,
  * incomplete, or sent as `c` and `s` fields), then each field's defects, then a missing gust or
@@ -892,7 +919,19 @@ function parseWeatherFields(ctx: DecodeContext, s: string, j: number, options: W
       }
       let run = weatherValueRun(s, j + 1, width, letter === 't');
       if (run.length === 0) break;
-      if (run.length > width + 1) run = run.slice(0, width);
+      if (run.length >= width + 2) {
+        // Digits that run on by two or more: a value out of range, dropped, when the run is
+        // followed by the end of the field or by a defined field it goes on to read. Anything
+        // else keeps the older rule: the field at its width, the rest left for the comment.
+        const after = j + 1 + run.length;
+        if (after >= s.length || definedFieldAt(s, after, new Set(seen).add(key), windKnown, options.positionless)) {
+          defects.push('out-of-range-value');
+          seen.add(key);
+          j = after;
+          continue;
+        }
+        run = run.slice(0, width);
+      }
       if (run.length !== width) defects.push('non-standard-weather-field-width');
       seen.add(key);
       j += 1 + run.length;

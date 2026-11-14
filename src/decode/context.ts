@@ -48,16 +48,30 @@ export class DecodeContext {
 
   /**
    * Decodes a text field from its bytes (a binary string): UTF-8, or when it is not valid UTF-8,
-   * the whole field as Latin-1 with one `non-utf8-text` warning for the packet.
+   * the whole field as Latin-1 with one `non-utf8-text` warning for the packet. Then, last, the
+   * text's control characters are judged: one `control-character-in-text` warning for the text
+   * (`judgeControl` false for text that is data, which is not judged).
    */
-  text(binary: string): string {
-    if (isAscii(binary)) return binary;
-    const decoded = decodeUtf8Binary(binary);
-    if (decoded !== undefined) return decoded;
-    if (!this.nonUtf8Reported) {
-      this.nonUtf8Reported = true;
-      this.tolerate('non-utf8-text');
+  text(binary: string, judgeControl = true): string {
+    let result = binary;
+    if (!isAscii(binary)) {
+      const decoded = decodeUtf8Binary(binary);
+      if (decoded !== undefined) {
+        result = decoded;
+      } else if (!this.nonUtf8Reported) {
+        this.nonUtf8Reported = true;
+        this.tolerate('non-utf8-text');
+      }
     }
-    return binary;
+    if (judgeControl) this.judgeControl(result);
+    return result;
+  }
+
+  /** Judges a text's control characters: a byte below 0x20 or 0x7F, one warning for the text. */
+  judgeControl(text: string): void {
+    if (CONTROL_RE.test(text)) this.tolerate('control-character-in-text');
   }
 }
+
+/** A control character: below U+0020, or U+007F. */
+const CONTROL_RE = /[\x00-\x1f\x7f]/;

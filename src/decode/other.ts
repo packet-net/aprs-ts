@@ -169,7 +169,8 @@ const CONTROL_RE = /[\x00-\x1f\x7f]/;
 
 /** `<`: station capabilities. */
 export function decodeCapabilities(ctx: DecodeContext, s: string): Capabilities {
-  const text = ctx.text(s.slice(1));
+  const text = ctx.text(s.slice(1), false);
+  let controlInValue = false;
   const capabilities: Capability[] = [];
   let freeText = false;
   for (const raw of text.split(',')) {
@@ -181,11 +182,15 @@ export function decodeCapabilities(ctx: DecodeContext, s: string): Capabilities 
     const token = eq < 0 ? item : trimSpaces(item.slice(0, eq));
     const value = eq < 0 ? undefined : trimSpaces(item.slice(eq + 1));
     if (token.length === 0 || token.includes(' ') || CONTROL_RE.test(token)) freeText = true;
-    if (value !== undefined && CONTROL_RE.test(value)) freeText = true;
+    if (value !== undefined && CONTROL_RE.test(value)) {
+      freeText = true;
+      controlInValue = true;
+    }
     capabilities.push(value === undefined ? [token] : [token, value]);
   }
   if (capabilities.length === 0) ctx.fail('invalid-capabilities');
   if (freeText) ctx.tolerate('free-text-capabilities');
+  if (controlInValue) ctx.tolerate('control-character-in-text');
   return { type: 'capabilities', capabilities };
 }
 
@@ -352,7 +357,7 @@ export function decodeUserDefined(ctx: DecodeContext, s: string): UserDefined {
 
 /** `,`: invalid or test data. */
 export function decodeTest(ctx: DecodeContext, s: string): TestData {
-  const data = ctx.text(s.slice(1));
+  const data = ctx.text(s.slice(1), false);
   return data.length > 0 ? { type: 'test', data } : { type: 'test' };
 }
 

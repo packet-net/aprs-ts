@@ -397,7 +397,12 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
   // A locator is read only at the start of the status text, after any type code or a Mic-E
   // altitude there; after a PHG or RNG, say, it is text (vectors rulings, F17).
   let locator: string | undefined;
-  const loc = extension && !extensionAfterLocator ? null : MIC_E_LOCATOR.exec(text);
+  let loc = extension && !extensionAfterLocator ? null : MIC_E_LOCATOR.exec(text);
+  // Taking an element out never joins the text either side of it into a locator.
+  if (loc && join !== undefined) {
+    const at = join - pre.removed.reduce((n, [a, b]) => (b <= join ? n + (b - a) : n), 0);
+    if (at > 0 && at < loc[0].length) loc = null;
+  }
   if (loc) {
     locator = loc[1]!.toUpperCase();
     text = text.slice(loc[0].length);
