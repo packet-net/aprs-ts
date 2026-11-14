@@ -10,7 +10,7 @@
   "bugs": {
     "url": "https://github.com/packet-net/aprs-ts/issues"
   },
-  "license": "AGPL-3.0-or-later",
+  "license": "MIT",
   "sideEffects": false,
   "engines": {
     "node": ">=20"

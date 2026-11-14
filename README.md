@@ -239,4 +239,4 @@ The examples in this README run as tests too (`test/readme.test.ts`).
 
 ## Licence
 
-AGPL-3.0-or-later; see [LICENSE](LICENSE). The device identification data is from the APRS device identification database, CC BY-SA 2.0; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+MIT; see [LICENSE](LICENSE). The device identification data is from the APRS device identification database, CC BY-SA 2.0; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
