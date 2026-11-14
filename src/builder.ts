@@ -13,7 +13,7 @@
 // `build()` encodes the packet, so anything the spec does not allow is refused there, with an
 // `AprsEncodeError` that says why.
 
-import { AprsEncodeError, DEFAULT_DESTINATION, firstRefusal, markGivenTwice, nearest, numberFault, refuse } from './encode/common.js';
+import { AprsEncodeError, DEFAULT_DESTINATION, firstRefusal, markGivenTwice, markMicEAltitudeBytesOnly, nearest, numberFault, refuse } from './encode/common.js';
 import { ax25Of, checkHeaderAddresses, encodeInformation, tnc2BytesOf, tnc2TextOf, wrapKiss } from './encode/index.js';
 import { symbolOf } from './symbols.js';
 import type {
@@ -214,8 +214,8 @@ export class PacketBuilder {
    * A weather report. With a position it is a position report with weather (the weather station
    * symbol, unless you pick another); without one it is a positionless weather report, which is
    * not recommended: one with a position is better. `at` is the report's time: a positionless
-   * report has one always (default now, as month, day, hour and minute), a positioned one only
-   * if you give it.
+   * report needs one (without it the build is refused as `missing-field`; the builder never reads
+   * the clock, so pass `new Date()` for the time now), a positioned one has one only if you give it.
    */
   weather(weather: WeatherInput, position: { latitude: number; longitude: number; at?: Date }): PositionBuilder;
   weather(weather: WeatherInput, options?: { at?: Date }): DataBuilder;
@@ -229,20 +229,22 @@ export class PacketBuilder {
       return at === undefined ? b : b.timestamp(at);
     }
     if (latitude !== undefined || longitude !== undefined) refuse('missing-field', 'a weather report with a position needs both latitude and longitude');
-    const when = at ?? new Date();
     return new DataBuilder(this.header, () => {
-      const timestamp: AprsTimestamp = {
-        kind: 'mdhm',
-        month: when.getUTCMonth() + 1,
-        day: when.getUTCDate(),
-        hour: when.getUTCHours(),
-        minute: when.getUTCMinutes(),
-      };
-      return { type: 'weather', timestamp, weather: weatherOf(weather) };
+      const data: Mutable<Extract<AprsData, { type: 'weather' }>> = { type: 'weather', weather: weatherOf(weather) };
+      if (at !== undefined) {
+        data.timestamp = {
+          kind: 'mdhm',
+          month: at.getUTCMonth() + 1,
+          day: at.getUTCDate(),
+          hour: at.getUTCHours(),
+          minute: at.getUTCMinutes(),
+        };
+      }
+      return data;
     });
   }
 
-  /** An object: `timestamp` defaults to now (objects always carry one). */
+  /** An object. Objects always carry a timestamp: give one with `timestamp(...)`, or the build is refused as `missing-field` (the builder never reads the clock). */
   object(name: string, latitude: number, longitude: number): ObjectBuilder {
     return new ObjectBuilder(this.header, name, latitude, longitude);
   }
@@ -258,7 +260,7 @@ export class PacketBuilder {
   }
 
   /** A message to `addressee`. */
-  message(addressee: string, text: string): MessageBuilder {
+  message(addressee: string, text = ''): MessageBuilder {
     return new MessageBuilder(this.header, addressee, text);
   }
 
@@ -273,7 +275,7 @@ export class PacketBuilder {
   }
 
   /** A bulletin (`id` a digit) or announcement (`id` a letter), optionally to a group. */
-  bulletin(id: string, text: string, group = ''): DataBuilder {
+  bulletin(id: string, text = '', group = ''): DataBuilder {
     return new DataBuilder(this.header, { type: 'bulletin', addressee: `BLN${id}${group}`, text });
   }
 
@@ -283,11 +285,17 @@ export class PacketBuilder {
   }
 
   /**
-   * A telemetry report: sequence, five analog values and eight bits (`'01101001'`, B1 first). The
-   * sequence is a number, 0-999, written in three digits; anything else is refused when the
-   * packet is built, not wrapped (vectors rulings, B6). Text sequences need hand-built data.
+   * A telemetry report: sequence, five analog values and eight bits (`'01101001'`, B1 first;
+   * `'00000000'` when left out). The sequence is a number, 0-999, written in three digits; left out
+   * it is refused as `missing-field`, and anything else out of range is refused when the packet is
+   * built, not wrapped (vectors rulings, B6). With no analog values given the five channels are
+   * empty. Text sequences need hand-built data.
    */
-  telemetry(sequence: number, analog: readonly (number | null)[], bits: string): TelemetryBuilder {
+  telemetry(
+    sequence?: number,
+    analog: readonly (number | null)[] = [null, null, null, null, null],
+    bits = '00000000',
+  ): TelemetryBuilder {
     return new TelemetryBuilder(this.header, sequence, analog, bits);
   }
 
@@ -346,7 +354,8 @@ abstract class PositionedBuilder<Self> {
     latitude: number,
     longitude: number,
   ) {
-    this.fields = { latitude, longitude, symbol: { table: '/', code: '/' } };
+    // No symbol until one is given: a report without one is refused as `invalid-symbol`.
+    this.fields = { latitude, longitude } as Mutable<PositionedFields>;
   }
 
   protected abstract self(): Self;
@@ -379,7 +388,7 @@ abstract class PositionedBuilder<Self> {
     return this.self();
   }
 
-  /** Altitude, feet, sent as a `/A=` in whole feet (rounded to the nearest, halves away from zero). */
+  /** Altitude, feet, sent as a `/A=` in whole feet (rounded to the nearest, halves away from zero); a Mic-E report sends it in its own altitude bytes, to the nearest metre. */
   altitudeFeet(feet: number): Self {
     this.fields.altitudeFeet = feet;
     this.altitudeUnit = 'feet';
@@ -389,6 +398,7 @@ abstract class PositionedBuilder<Self> {
   /**
    * Altitude, metres: converted to feet (0.3048 m each) and rounded once for a `/A=`; a Mic-E
    * report sends it in its own altitude bytes, whose unit is the metre, rounded to the metre.
+   * An altitude outside those bytes' range, -10000 to 743570 m, is refused.
    */
   altitudeM(metres: number): Self {
     this.fields.altitudeFeet = metres / 0.3048;
@@ -500,7 +510,7 @@ export class PositionBuilder extends ReportBuilder<PositionBuilder> {
 
 /** An object report. */
 export class ObjectBuilder extends ReportBuilder<ObjectBuilder> {
-  private timestampValue: AprsTimestamp = timestampOf(new Date());
+  private timestampValue?: AprsTimestamp;
   private killedValue = false;
 
   constructor(
@@ -516,7 +526,7 @@ export class ObjectBuilder extends ReportBuilder<ObjectBuilder> {
     return this;
   }
 
-  /** When the object was at this position (defaults to now). */
+  /** When the object was at this position (an object needs one). */
   timestamp(at: Date | AprsTimestamp, kind?: 'dhm-zulu' | 'hms'): ObjectBuilder {
     this.timestampValue = asTimestamp(at, kind);
     return this;
@@ -532,9 +542,9 @@ export class ObjectBuilder extends ReportBuilder<ObjectBuilder> {
     const data: Mutable<Extract<AprsData, { type: 'object' }>> = {
       type: 'object',
       name: this.name,
-      timestamp: this.timestampValue,
       ...this.fields,
     };
+    if (this.timestampValue) data.timestamp = this.timestampValue;
     if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
     if (this.killedValue) data.killed = true;
     return built(this.header, data);
@@ -583,7 +593,8 @@ export class ItemBuilder extends ReportBuilder<ItemBuilder> {
 /** A Mic-E report. */
 export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
   private messageValue: MicEMessage = 'off-duty';
-  private typeCodeValue: string | undefined = '`';
+  private typeCodeValue: string | undefined = "'";
+  private deviceSuffixValue: string | undefined;
   private locatorValue?: string;
   private oldValue = false;
 
@@ -597,9 +608,20 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
     return this;
   }
 
-  /** Whether the sender can receive messages: the `` ` `` (yes, the default) or `'` type code. */
+  /** Whether the sender can receive messages: the `` ` `` (yes) or `'` (no, the default) type code. */
   messaging(capable = true): MicEBuilder {
     this.typeCodeValue = capable ? '`' : "'";
+    return this;
+  }
+
+  /**
+   * The device type: the type code before the status text (`` ` ``, `'`, `>`, `]` or a space) and
+   * the device suffix at its end (`_%`, `=`, ...). A type code given here replaces what
+   * `messaging()` chose; a suffix is written only after a type code.
+   */
+  deviceType(typeCode?: string, suffix?: string): MicEBuilder {
+    if (typeCode !== undefined) this.typeCodeValue = typeCode;
+    this.deviceSuffixValue = suffix;
     return this;
   }
 
@@ -619,10 +641,14 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
     const data: Mutable<Extract<AprsData, { type: 'mic-e' }>> = { type: 'mic-e', micEMessage: this.messageValue, ...this.fields };
     // A course of 0 (after rounding) is unknown, which Mic-E writes as 0: no course (B1).
     if (data.courseDegrees !== undefined && Number.isFinite(data.courseDegrees) && nearest(data.courseDegrees) === 0) delete data.courseDegrees;
-    // Metres go in the Mic-E altitude bytes, to the metre; feet in a /A= (B2).
-    if (data.altitudeFeet !== undefined && this.altitudeUnit === 'metres') data.altitudeFeet = nearest(data.altitudeFeet * 0.3048) / 0.3048;
-    if (data.altitudeFeet !== undefined && this.altitudeUnit === 'feet') data.altitudeInComment = true;
+    // An altitude in either unit goes in the Mic-E altitude bytes, rounded once to the metre from
+    // the value given; one outside the bytes' range is refused, never moved to a /A=.
+    if (data.altitudeFeet !== undefined && Number.isFinite(data.altitudeFeet)) {
+      data.altitudeFeet = nearest(data.altitudeFeet * 0.3048) / 0.3048;
+      markMicEAltitudeBytesOnly(data);
+    }
     if (this.typeCodeValue !== undefined) data.typeCode = this.typeCodeValue;
+    if (this.deviceSuffixValue !== undefined) data.deviceSuffix = this.deviceSuffixValue;
     if (this.locatorValue !== undefined) data.locator = this.locatorValue;
     if (this.oldValue) data.oldData = true;
     return built(this.header, data);
@@ -675,7 +701,8 @@ export class MessageBuilder {
 /** A status report. */
 export class StatusBuilder {
   private timestampValue?: AprsTimestamp;
-  private locatorValue?: { locator: string; symbol: AprsSymbol };
+  private locatorValue?: string;
+  private symbolValue?: AprsSymbol;
   private beamValue?: { headingCode: string; powerCode: string };
 
   constructor(
@@ -689,9 +716,20 @@ export class StatusBuilder {
     return this;
   }
 
-  /** A Maidenhead locator and a symbol, in place of a timestamp. */
-  locator(locator: string, symbol: AprsSymbol | string): StatusBuilder {
-    this.locatorValue = { locator: locator.toUpperCase(), symbol: asSymbol(symbol) };
+  /**
+   * A Maidenhead locator, in place of a timestamp, and optionally its symbol. A locator and a
+   * symbol go together: either one given without the other is refused when the packet is built
+   * (`missing-field`).
+   */
+  locator(locator: string, symbol?: AprsSymbol | string): StatusBuilder {
+    this.locatorValue = locator.toUpperCase();
+    if (symbol !== undefined) this.symbolValue = asSymbol(symbol);
+    return this;
+  }
+
+  /** The symbol that goes with a locator. */
+  symbol(symbol: AprsSymbol | string): StatusBuilder {
+    this.symbolValue = asSymbol(symbol);
     return this;
   }
 
@@ -704,10 +742,8 @@ export class StatusBuilder {
   build(): BuiltPacket {
     const data: Mutable<Extract<AprsData, { type: 'status' }>> = { type: 'status' };
     if (this.timestampValue) data.timestamp = this.timestampValue;
-    if (this.locatorValue) {
-      data.locator = this.locatorValue.locator;
-      data.symbol = this.locatorValue.symbol;
-    }
+    if (this.locatorValue !== undefined) data.locator = this.locatorValue;
+    if (this.symbolValue !== undefined) data.symbol = this.symbolValue;
     if (this.beamValue) data.beam = this.beamValue;
     if (this.text !== undefined && this.text.length > 0) data.text = this.text;
     return built(this.header, data);
@@ -724,7 +760,7 @@ export class TelemetryBuilder {
 
   constructor(
     private readonly header: Header,
-    private readonly sequence: number,
+    private readonly sequence: number | undefined,
     private readonly analog: readonly (number | null)[],
     private readonly bits: string,
   ) {}
@@ -737,14 +773,15 @@ export class TelemetryBuilder {
 
   build(): BuiltPacket {
     const number = this.sequence;
-    if (!Number.isInteger(number) || number < 0 || number > 999) refuse(numberFault(number), `telemetry sequence ${String(number)} is not 0-999`);
-    const sequence = String(number).padStart(3, '0');
-    const data: Mutable<Extract<AprsData, { type: 'telemetry' }>> = {
+    // A sequence left out is `missing-field`, held by the encoder until the rest is checked.
+    const left = number === undefined || number === null;
+    if (!left && (!Number.isInteger(number) || number < 0 || number > 999)) refuse(numberFault(number), `telemetry sequence ${String(number)} is not 0-999`);
+    const data = {
       type: 'telemetry',
-      sequence,
       analog: [...this.analog],
       bits: this.bits,
-    };
+      ...(left ? {} : { sequence: String(number).padStart(3, '0') }),
+    } as Mutable<Extract<AprsData, { type: 'telemetry' }>>;
     if (this.commentValue !== undefined && this.commentValue.length > 0) data.comment = this.commentValue;
     return built(this.header, data);
   }

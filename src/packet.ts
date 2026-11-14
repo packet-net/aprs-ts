@@ -19,7 +19,9 @@ export function hasWarnings(packet: AprsPacket): boolean {
 
 /**
  * A received packet as the bytes of a TNC2 / APRS-IS line: its header, then the information
- * field exactly as received. Nothing is checked or re-encoded.
+ * field exactly as received. Nothing is checked or re-encoded: this writes out a packet the program
+ * already holds, it is not an encoder, so it makes no size check (a received field over 256 bytes
+ * is written as it came).
  */
 export function packetToTnc2Bytes(packet: AprsPacket): Uint8Array {
   return guarded(() => {
@@ -42,6 +44,7 @@ export function packetToTnc2(packet: AprsPacket): string {
 
 /**
  * A received packet as an AX.25 UI frame (no flags, no FCS), the information field as received.
+ * Not an encoder: the field is passed through as it stands, with no size check.
  *
  * @throws AprsEncodeError when AX.25 cannot carry an address as sent (a call over six characters,
  * an SSID written with a leading zero, an SSID over 15) or the path has more than 8 entries.

@@ -14,6 +14,7 @@ export type DiagnosticCode =
   | 'too-many-digipeaters'
   | 'trailing-line-break'
   | 'non-utf8-text'
+  | 'control-character-in-text'
   | 'truncated'
   | 'not-aprs'
   | 'reserved-data-type'
@@ -66,7 +67,8 @@ export type DiagnosticCode =
   | 'brace-in-message-text'
   | 'invalid-addressee-characters'
   | 'letter-group-bulletin'
-  | 'free-text-capabilities';
+  | 'free-text-capabilities'
+  | 'implementation-limit';
 
 /** The codes a lenient decoder may accept with a warning; a strict decoder rejects them. */
 export type TolerableCode =
@@ -77,6 +79,7 @@ export type TolerableCode =
   | 'invalid-ax25-address-characters'
   | 'trailing-line-break'
   | 'non-utf8-text'
+  | 'control-character-in-text'
   | 'out-of-range-value'
   | 'invalid-timestamp'
   | 'lowercase-hemisphere'
@@ -101,7 +104,8 @@ export type TolerableCode =
   | 'brace-in-message-text'
   | 'invalid-addressee-characters'
   | 'letter-group-bulletin'
-  | 'free-text-capabilities';
+  | 'free-text-capabilities'
+  | 'control-character-in-text';
 
 /** What each code means, in plain ASCII. */
 export const DIAGNOSTIC_MEANINGS: Readonly<Record<DiagnosticCode, string>> = {
@@ -116,6 +120,7 @@ export const DIAGNOSTIC_MEANINGS: Readonly<Record<DiagnosticCode, string>> = {
   'too-many-digipeaters': "The AX.25 frame has more than 8 digipeater addresses.",
   'trailing-line-break': "The information field ends with CR or LF (APRS12c ch. 5, UAP 5.13).",
   'non-utf8-text': "Text that is not valid UTF-8 (UAP 5.16).",
+  'control-character-in-text': "Text holds a byte below 0x20 or the byte 0x7F (a TAB, or a CR or LF inside the text, included); one per text, which is kept as sent (APRS12c gives text as printable characters).",
   'truncated': "The information field is shorter than its format requires.",
   'not-aprs': "The first byte is not a data type identifier (APRS12c ch. 20).",
   'reserved-data-type': "A reserved data type identifier with no defined format (APRS12c ch. 5).",
@@ -169,6 +174,7 @@ export const DIAGNOSTIC_MEANINGS: Readonly<Record<DiagnosticCode, string>> = {
   'invalid-addressee-characters': "A message addressee contains a space or : (APRS12c ch. 14).",
   'letter-group-bulletin': "A bulletin addressee has a group name after a letter, e.g. BLNCNET; group bulletins use a digit (APRS12c ch. 14).",
   'free-text-capabilities': "A < station capabilities packet holds free text rather than TOKEN / TOKEN=VALUE items: a token that is empty or holds a space or a control character, or a value that holds a control character (APRS12c ch. 15).",
+  'implementation-limit': "The packet needs more than the implementation's fixed capacity holds; only an implementation with such a capacity gives it (this one has none, so it never does).",
 };
 
 /** Every tolerable code. */
@@ -180,6 +186,7 @@ export const TOLERABLE_CODES: readonly TolerableCode[] = [
   'invalid-ax25-address-characters',
   'trailing-line-break',
   'non-utf8-text',
+  'control-character-in-text',
   'out-of-range-value',
   'invalid-timestamp',
   'lowercase-hemisphere',
@@ -228,6 +235,7 @@ export type RefusalCode =
   | 'invalid-message-id'
   | 'padding-space'
   | 'too-long'
+  | 'information-field-too-long'
   | 'malformed'
   | 'invalid-character'
   | 'text-reads-as-field'
@@ -256,9 +264,10 @@ export const REFUSAL_MEANINGS: Readonly<Record<RefusalCode, string>> = {
   'invalid-name': "An object or item name is the wrong length or holds a character a name cannot.",
   'invalid-message-id': "A message ID is empty, over 5 characters or not letters and digits, or an ack or reject carries the wrong kind of ID.",
   'padding-space': "Text starts or ends with a space that would be read back as padding (an object name, a capability value).",
-  'too-long': "Free text or a list is longer than its field allows: message text over 67 characters, a project title over 23, more than 13 names, more than 5 analog values.",
+  'too-long': "Free text or a list is longer than its field allows (message text over 67 characters, a project title over 23, more than 13 names, more than 5 analog values).",
+  'information-field-too-long': "The information field as written is over 256 bytes (APRS12c ch. 3), and nothing else is wrong with the data: checked last, on the bytes written.",
   'malformed': "Text in a fixed-form field is not that form: a locator, a bit sense, telemetry bits, signpost text, a capability token, a weather extra field, too few telemetry values.",
-  'invalid-character': "Free text holds a character its field cannot carry: a line break (or a field that would end in CR or LF), a `{` in message-like text, or a character outside printable ASCII where only that is allowed.",
+  'invalid-character': "Free text holds a character its field cannot carry: a control character (a byte below 0x20, a line break included, or 0x7F), a `{` in message-like text, or a character outside printable ASCII where only that is allowed.",
   'text-reads-as-field': "Free text would read back as a structured element (an altitude, a `!DAO!`, telemetry, a frequency, PHG/RNG/DFS, a timestamp or locator, a Mic-E device suffix, a weather field), and no clean form avoids it.",
   'not-a-number': "A value is NaN or infinite.",
   'value-out-of-range': "A number is outside what its field holds, after rounding (latitude, speed, gust, snowfall, range, footprint, bearing, telemetry sequence, PHG and DFS digits, an SSID).",

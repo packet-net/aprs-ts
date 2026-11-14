@@ -19,7 +19,7 @@ import type {
   WeatherReport,
 } from '../types.js';
 import { identifyMicE } from '../deviceid.js';
-import { base91, checkSymbol, freeText, isValidTimestamp, nearest, pad, flag, numberFault, refuse, timestamp7, whole } from './common.js';
+import { base91, checkSymbol, freeText, isValidTimestamp, micEAltitudeBytesOnly, nearest, pad, flag, numberFault, refuse, timestamp7, whole } from './common.js';
 
 const EPS = 1e-9;
 const CUT_TOLERANCE = 1e-6;
@@ -392,7 +392,8 @@ function weatherFields(w: Weather, mandatory: boolean): string {
 
 /** A positionless weather report (`_`). */
 export function encodeWeatherReport(d: WeatherReport): string {
-  if (!d.timestamp || d.timestamp.kind !== 'mdhm') flag('invalid-timestamp', 'a positionless weather report has a month/day/hour/minute timestamp');
+  if (!d.timestamp) flag('missing-field', 'a positionless weather report has a month/day/hour/minute timestamp');
+  else if (d.timestamp.kind !== 'mdhm') flag('invalid-timestamp', 'a positionless weather report has a month/day/hour/minute timestamp');
   else if (!isValidTimestamp(d.timestamp)) flag('invalid-timestamp', 'the timestamp is out of range');
   if (d.comment !== undefined && d.comment.length > 0) flag('field-not-allowed', 'a weather report has no comment');
   const t = d.timestamp?.kind === 'mdhm' ? d.timestamp : { kind: 'mdhm', month: 0, day: 0, hour: 0, minute: 0 };
@@ -493,7 +494,7 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
   if (!f.compressed && f.dfBearing && f.storm) flag('extension-conflict', 'DF and storm data both extend the course/speed');
   if (!f.compressed && f.courseDegrees !== undefined && f.area === undefined && f.symbol.table === '\\' && f.symbol.code === 'l') flag('symbol-mismatch', 'course/speed on the area symbol (\\l) would read back as an area');
   if (f.dfBearing && !(f.symbol.table === '/' && f.symbol.code === '\\')) flag('symbol-mismatch', 'a DF bearing needs the DF symbol (/\\)');
-  if (f.storm && !(f.symbol.code === '@' && (f.symbol.table === '/' || f.symbol.table === '\\'))) flag('symbol-mismatch', 'storm data needs a hurricane symbol (/@ or \\@)');
+  if (f.storm && !(f.symbol.code === '@' && /^[/\\0-9A-Z]$/.test(f.symbol.table))) flag('symbol-mismatch', 'storm data needs a hurricane symbol (/@, \\@ or an overlaid @)');
   if (f.signpost !== undefined && !(f.symbol.table === '\\' && f.symbol.code === 'm')) flag('symbol-mismatch', 'a signpost needs the signpost symbol (\\m)');
   if (f.area && !(f.symbol.table === '\\' && f.symbol.code === 'l')) flag('symbol-mismatch', 'an area object needs the area symbol (\\l)');
 
@@ -757,14 +758,38 @@ function micEDestination(d: MicEReport, lat: Digits, lonDegrees: number): string
   return out;
 }
 
-export function micEAltitude(feet: number): string | undefined {
-  // NaN or an infinity has no Mic-E bytes; the /A= check names it not-a-number.
-  if (!Number.isFinite(feet)) return undefined;
+/** The most and least metres the Mic-E altitude bytes hold: 91^3 - 1 less 10,000 m below sea level. */
+const MIC_E_ALTITUDE_MIN_M = -10000;
+const MIC_E_ALTITUDE_MAX_M = 91 ** 3 - 1 - 10000;
+
+/** Whether `v` is within 1e-6 of a whole number. */
+function nearlyWhole(v: number): boolean {
+  return Math.abs(v - Math.round(v)) <= 1e-6;
+}
+
+/**
+ * Where neutral Mic-E data puts its altitude (vectors README, Encoding): in a `/A=` only when only
+ * a `/A=` holds it exactly, that is a whole number of feet within six digits that the Mic-E bytes
+ * do not hold exactly (not a whole number of metres, or outside their range); otherwise in the
+ * Mic-E altitude bytes, rounded to the metre.
+ */
+function micEAltitudeInText(feet: number): boolean {
+  if (!nearlyWhole(feet)) return false;
+  const f = Math.round(feet);
+  if (f < -99999 || f > 999999) return false;
+  const m = feet * METRES_PER_FOOT;
+  const exactInBytes = nearlyWhole(m) && Math.round(m) >= MIC_E_ALTITUDE_MIN_M && Math.round(m) <= MIC_E_ALTITUDE_MAX_M;
+  return !exactInBytes;
+}
+
+/** The Mic-E altitude bytes for an altitude in feet, rounded once to the metre; one outside their range is refused. */
+function micEAltitudeBytes(feet: number): string {
   const metres = nearest(feet * METRES_PER_FOOT);
-  if (Math.abs(metres / METRES_PER_FOOT - feet) > 1e-6) return undefined;
-  const v = metres + 10000;
-  if (v < 0 || v > 91 ** 3 - 1) return undefined;
-  return base91(v, 3) + '}';
+  if (metres < MIC_E_ALTITUDE_MIN_M || metres > MIC_E_ALTITUDE_MAX_M) {
+    flag('value-out-of-range', `a Mic-E altitude is ${MIC_E_ALTITUDE_MIN_M} to ${MIC_E_ALTITUDE_MAX_M} metres`);
+    return '';
+  }
+  return base91(metres + 10000, 3) + '}';
 }
 
 /** A Mic-E report: the information field and the destination address. */
@@ -832,13 +857,20 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   }
   let altitudeInComment: number | undefined;
   if (d.altitudeFeet !== undefined) {
-    const alt = d.altitudeInComment ? undefined : micEAltitude(d.altitudeFeet);
-    if (alt !== undefined) {
-      // With no type code the first altitude byte would be read as one.
-      if (d.typeCode === undefined && text.length === 0 && '`\'>] '.includes(alt[0]!) && !(nearest(d.altitudeFeet) >= -99999 && nearest(d.altitudeFeet) <= 999999)) flag('value-has-no-form', 'a Mic-E altitude whose first byte is a type code character has no form');
-      text += alt;
+    if (!Number.isFinite(d.altitudeFeet)) flag('not-a-number', 'altitude is not a number');
+    // A builder always sends the Mic-E bytes; decoded data written back keeps the `/A=` it came from.
+    const inText = d.altitudeInComment || (!micEAltitudeBytesOnly(d) && Number.isFinite(d.altitudeFeet) && micEAltitudeInText(d.altitudeFeet));
+    if (inText) altitudeInComment = d.altitudeFeet;
+    else if (Number.isFinite(d.altitudeFeet)) {
+      const alt = micEAltitudeBytes(d.altitudeFeet);
+      // With no type code the first altitude byte would be read as one: the Mic-E bytes have no
+      // clean form, so a `/A=` takes the altitude when it holds it exactly, else it has no form.
+      if (alt.length > 0 && d.typeCode === undefined && text.length === 0 && '`\'>] '.includes(alt[0]!)) {
+        const feet = d.altitudeFeet;
+        if (!micEAltitudeBytesOnly(d) && nearlyWhole(feet) && Math.round(feet) >= -99999 && Math.round(feet) <= 999999) altitudeInComment = feet;
+        else flag('value-has-no-form', 'a Mic-E altitude whose first byte is a type code character has no form');
+      } else text += alt;
     }
-    else altitudeInComment = d.altitudeFeet;
   }
   let after = '';
   const exts = [d.phg ? 1 : 0, d.rangeMiles !== undefined ? 1 : 0, d.dfs ? 1 : 0].reduce((a, b) => a + b, 0);
@@ -872,10 +904,7 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
     else if (identifyMicE(d.typeCode, d.deviceSuffix) === undefined) flag('invalid-code', 'the Mic-E device suffix is not one the device database knows for the type code');
     text += d.deviceSuffix;
   }
-  // Mic-E status text must not start with 0x1D, which would be taken for Rev 0 telemetry
-  // (APRS12c ch. 10), so a comment that would start it is written after a /.
-  const legacy = d.legacyTelemetry !== undefined && d.legacyTelemetry.length > 0;
-  if (!legacy && text.startsWith('\x1d') && mode !== 'delimited') return encodeMicE(d, 'delimited');
+  // A comment that starts with 0x1D is refused as text with a control character, by freeText.
   info += text;
   if (/[\r\n]$/.test(info)) flag('invalid-character', 'a Mic-E information field cannot end in a line break');
   return { text: info, destination };

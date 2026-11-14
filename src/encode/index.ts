@@ -55,8 +55,13 @@ function withCompression(b: { text: string; compression?: CompressionType }): At
   return b.compression ? { binary: b.text, compression: b.compression } : { binary: b.text };
 }
 
+/** The most bytes an information field holds (APRS12c ch. 3). */
+const MAX_INFORMATION_BYTES = 256;
+
 function attempt(data: AprsData, mode: CommentMode): Attempt {
-  return collect(() => attemptOnce(data, mode));
+  return collect(() => {
+    return attemptOnce(data, mode);
+  });
 }
 
 const INNER_HEADER_CODES: ReadonlySet<string> = new Set([
@@ -260,6 +265,15 @@ export function encodeInformation(data: AprsData): EncodedInformation {
   return guarded(() => encodeShaped(checkShape(data)));
 }
 
+/** Whether a Mic-E attempt reads back with the frequency it was given, fields and all. */
+function readsBackWithItsFrequency(data: AprsData, a: Attempt): boolean {
+  const given = (data as { frequency?: unknown }).frequency;
+  if (given === undefined) return false;
+  const got = toNeutralData(decodeInformation(binaryToBytes(a.binary), a.destination ?? DEFAULT_DESTINATION, ParseOptions.lenient).data) as { frequency?: unknown };
+  const want = toNeutralData(expected(data, a)) as { frequency?: unknown };
+  return JSON.stringify(got.frequency) === JSON.stringify(want.frequency);
+}
+
 function encodeShaped(data: AprsData): EncodedInformation {
   const first = attempt(data, 'plain');
   let problems = check(data, first);
@@ -267,7 +281,11 @@ function encodeShaped(data: AprsData): EncodedInformation {
   if (problems.length > 0 && typeof (data as { comment?: unknown }).comment === 'string') {
     // The comment would read as something else: try it straight after a frequency, then after a
     // /, then after a space.
-    for (const mode of ['joined', 'delimited', 'spaced'] as const) {
+    // Free text after a frequency follows a space. It goes straight on to the frequency only
+    // when the space would make it read as more frequency fields; when the frequency reads back
+    // whole and the text does not (a Mic-E ' X' at the end is the device suffix), it takes a /.
+    const modes = data.type === 'mic-e' && readsBackWithItsFrequency(data, first) ? (['delimited', 'joined', 'spaced'] as const) : (['joined', 'delimited', 'spaced'] as const);
+    for (const mode of modes) {
       let next: Attempt | undefined;
       try {
         next = attempt(data, mode);
@@ -282,6 +300,10 @@ function encodeShaped(data: AprsData): EncodedInformation {
     }
   }
   if (problems.length > 0) refuse(firstRefusal(problems).code, `it would not read back the same: ${problems.map((p) => p.text).join('; ')}`);
+  // The size is the last check, on the bytes actually written: a record any other rule refuses
+  // has been refused above, with that rule's code.
+  if (chosen.binary.length > MAX_INFORMATION_BYTES)
+    throw new AprsEncodeError(`the information field is ${chosen.binary.length} bytes; at most ${MAX_INFORMATION_BYTES} are allowed`, 'information-field-too-long');
   const information = binaryToBytes(chosen.binary);
   return chosen.destination !== undefined ? { information, destination: chosen.destination } : { information };
 }
@@ -390,7 +412,7 @@ export function encodeAx25(p: PacketToEncode): Uint8Array {
   });
 }
 
-/** Wraps an AX.25 frame for a KISS TNC: FEND, a data command on `port`, escaping, FEND. Throws RangeError unless `port` is an integer 0-15. */
+/** Wraps an AX.25 frame for a KISS TNC: FEND, a data command on `port`, escaping, FEND. Not an encoder: the frame is passed through as it stands, with no size check. Throws RangeError unless `port` is an integer 0-15. */
 export function wrapKiss(frame: Uint8Array, port = 0): Uint8Array {
   if (!Number.isInteger(port) || port < 0 || port > 15) throw new RangeError('a KISS port is 0-15');
   const out: number[] = [0xc0, (port & 0x0f) << 4];

@@ -664,7 +664,7 @@ function removeRanges(s: string, ranges: readonly [number, number][]): string {
 export function liftTelemetryAndDao(
   s: string,
   joins: readonly number[] = [],
-): { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; cuts: number[] } {
+): { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; cuts: number[]; removed: readonly [number, number][] } {
   const tel = findCommentTelemetry(s);
   let dao: DaoFound | undefined;
   for (let p = s.length - 5; p >= 0; p--) {
@@ -686,7 +686,11 @@ export function liftTelemetryAndDao(
     cuts.push(a - removed);
     removed += b - a;
   }
-  const out: { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; cuts: number[] } = { rest: removeRanges(s, ranges), cuts };
+  const out: { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; cuts: number[]; removed: readonly [number, number][] } = {
+    rest: removeRanges(s, ranges),
+    cuts,
+    removed: ranges,
+  };
   if (tel) out.telemetry = tel.telemetry;
   if (dao) out.dao = dao;
   return out;
@@ -808,6 +812,11 @@ interface WeatherFieldOptions {
   positionless: boolean;
   /** After a compressed position, whose cs bytes are where the wind goes. */
   compressed?: boolean;
+  /**
+   * Where trailing elements a positioned report lifts first (base-91 telemetry, a `!DAO!`) start:
+   * the weather text ends there, as it does at the end of the information field.
+   */
+  endsAt?: readonly number[];
 }
 
 /**
@@ -831,6 +840,29 @@ function weatherValueRun(s: string, j: number, width: number, signed: boolean): 
 
 function isLetter(c: string | undefined): boolean {
   return c !== undefined && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'));
+}
+
+/**
+ * Whether a weather field this library defines, not already read (`seen`), with a value, starts at
+ * `k`: the field the main loop would read there.
+ */
+function definedFieldAt(s: string, k: number, seen: ReadonlySet<string>, windKnown: boolean, positionless: boolean): boolean {
+  const letter = s[k]!;
+  const width = WEATHER_WIDTH[letter];
+  if (width === undefined) return false;
+  let key = letter;
+  if (letter === 's') key = !seen.has('s:wind') && (seen.has('c') || (positionless && !windKnown)) ? 's:wind' : 's:snow';
+  if (letter === 'l') key = 'L';
+  if (seen.has(key)) return false;
+  if (letter === 'c' && windKnown) return false;
+  if (key === 's:snow') {
+    const v = s.slice(k + 1, k + 4);
+    if (/^[0-9.]{3}$/.test(v) && /[0-9]/.test(v) && !/\..*\./.test(v)) return true;
+    if (v === '   ') return true;
+    const dots = /^\.{1,3}/.exec(v)?.[0];
+    return dots !== undefined && !(dots.length < 3 && isDigit(v[dots.length]));
+  }
+  return weatherValueRun(s, k + 1, width, letter === 't').length > 0;
 }
 
 /**
@@ -892,7 +924,19 @@ function parseWeatherFields(ctx: DecodeContext, s: string, j: number, options: W
       }
       let run = weatherValueRun(s, j + 1, width, letter === 't');
       if (run.length === 0) break;
-      if (run.length > width + 1) run = run.slice(0, width);
+      if (run.length >= width + 2) {
+        // Digits that run on by two or more: a value out of range, dropped, when the run is
+        // followed by the end of the field or by a defined field it goes on to read. Anything
+        // else keeps the older rule: the field at its width, the rest left for the comment.
+        const after = j + 1 + run.length;
+        if (after >= s.length || options.endsAt?.includes(after) || definedFieldAt(s, after, new Set(seen).add(key), windKnown, options.positionless)) {
+          defects.push('out-of-range-value');
+          seen.add(key);
+          j = after;
+          continue;
+        }
+        run = run.slice(0, width);
+      }
       if (run.length !== width) defects.push('non-standard-weather-field-width');
       seen.add(key);
       j += 1 + run.length;
@@ -1101,7 +1145,8 @@ function decodeExtensionAndComment(ctx: DecodeContext, s: string, i: number, pos
           i += 8;
         }
       }
-      if (pos.symbol.code === '@' && (pos.symbol.table === '/' || pos.symbol.table === '\\')) {
+      // An overlay (0-9, A-Z) stands for the alternate table, so an overlaid @ is the hurricane symbol.
+      if (pos.symbol.code === '@' && /^[/\\0-9A-Z]$/.test(pos.symbol.table)) {
         const storm = parseStorm(s.slice(i));
         if (storm) {
           f.storm = storm.storm;
@@ -1194,7 +1239,9 @@ function decodeWeatherAfterPosition(ctx: DecodeContext, s: string, i: number, po
     if (spd !== undefined) wind.speedMph = spd;
     i += 7;
   }
-  const parsed = parseWeatherFields(ctx, s, i, { wind, positionless: false, compressed: pos.compressed });
+  // The weather text ends where a trailing element lifted first begins (telemetry, a !DAO!).
+  const endsAt = liftTelemetryAndDao(s.slice(i)).removed.map(([a]) => a + i);
+  const parsed = parseWeatherFields(ctx, s, i, { wind, positionless: false, compressed: pos.compressed, endsAt });
   const tail = weatherTail(ctx, parsed.weather, s.slice(parsed.end), true, (dao) => applyDao(ctx, f, pos, dao));
   f.weather = parsed.weather;
   if (pos.compressed && pos.csBlank && !windFromCs) {
