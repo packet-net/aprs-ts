@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 (2026-11-14)
 
 The round 3 rulings of the conformance vectors (aprs-vectors#24), for 1.1.0. The vectors runner now checks the refusal code each case names, not only that the encoder refused.
 
