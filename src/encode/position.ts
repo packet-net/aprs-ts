@@ -377,13 +377,19 @@ function weatherFields(w: Weather, mandatory: boolean): string {
   if (w.snow24hIn !== undefined) out += 's' + snowfallText(w.snow24hIn);
   if (w.rainRaw !== undefined) out += '#' + pad(whole(w.rainRaw, 0, 999, 'raw rain counter'), 3);
   for (const e of w.extra ?? []) {
-    if (!/^[A-Za-z]$/.test(e.letter) || 'csgtrpPhbLl'.includes(e.letter)) flag('invalid-character', `${e.letter} is not an extra weather field letter`);
-    if (!/^[0-9.-]{2,}$/.test(e.value) || !/[0-9]$/.test(e.value)) flag('invalid-character', 'an extra weather field is digits, dots or -, ending in a digit');
+    // Extra fields are free text: a control character is refused as one, and text that would read
+    // as something else (a field already read, a letter or a value of the wrong shape) as text that reads as a field.
+    if (/[\x00-\x1f\x7f]/.test(e.letter + e.value)) flag('invalid-character', 'an extra weather field contains a control character');
+    if (!/^[A-Za-z]$/.test(e.letter) || 'csgtrpPhbLl'.includes(e.letter)) flag('text-reads-as-field', `${e.letter} is not an extra weather field letter`);
+    if (!/^[0-9.-]{2,}$/.test(e.value) || !/[0-9]$/.test(e.value)) flag('text-reads-as-field', 'an extra weather field is digits, dots or -, ending in a digit');
     out += e.letter + e.value;
   }
   if (w.software !== undefined || w.unit !== undefined) {
-    if (w.software === undefined || !/^[A-Za-z]$/.test(w.software)) flag('text-reads-as-field', 'the weather software type is one letter');
-    if (w.unit === undefined || !/^[A-Za-z0-9_-]{2,4}$/.test(w.unit) || /^[0-9]+$/.test(w.unit))
+    // One thing, a letter then a 2-4 character unit: either alone is a field the report needs.
+    if (w.software === undefined) flag('missing-field', 'a weather unit goes with a software type');
+    else if (w.unit === undefined) flag('missing-field', 'a weather software type goes with a unit');
+    if (w.software !== undefined && !/^[A-Za-z]$/.test(w.software)) flag('text-reads-as-field', 'the weather software type is one letter');
+    if (w.unit !== undefined && (!/^[A-Za-z0-9_-]{2,4}$/.test(w.unit) || /^[0-9]+$/.test(w.unit)))
       flag('text-reads-as-field', 'the weather unit is 2-4 letters, digits, - or _');
     out += (w.software ?? '') + (w.unit ?? '');
   }

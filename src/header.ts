@@ -113,6 +113,21 @@ export function parseHeaderText(
   return { source, destination, path: markUsed(raw) };
 }
 
+/**
+ * Reads a header as written (`SOURCE>DEST,PATH`, no colon) back, as a line carrying it would be
+ * read, with a third-party source allowed; `undefined` if it is unusable or would end at a colon.
+ */
+export function readHeaderText(header: string, options: ParseOptions): { source: string; destination: string; path: PathEntry[]; diagnostics: Diagnostic[] } | undefined {
+  if (header.includes(':')) return undefined;
+  const diags: Diagnostic[] = [];
+  try {
+    return { ...parseHeaderText(header, options, diags, true), diagnostics: diags };
+  } catch (e) {
+    if (e instanceof HeaderRejected) return undefined;
+    throw e;
+  }
+}
+
 function markUsed(raw: readonly { address: string; marked: boolean }[]): PathEntry[] {
   let last = -1;
   raw.forEach((e, i) => {

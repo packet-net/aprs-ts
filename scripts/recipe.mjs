@@ -8,8 +8,9 @@
 
 /**
  * @param lib `{ Aprs, AprsEncodeError, refusalRank }` of the library to build with.
- * @returns `buildRecipe(n, recipe)`: `{ n, result: 'built', bytes }` (the TNC2 line), or
- *   `{ n, result: 'refused' | 'unsupported', reason, refusal? }`.
+ * @returns `buildRecipe(n, recipe, write)`: `{ n, result: 'built', bytes, packet }` (the TNC2 line,
+ *   or with `write` `'ax25'` the AX.25 frame), or `{ n, result: 'refused' | 'unsupported', reason,
+ *   refusal? }`; a refusal of the header when it is written carries the `packet` built as well.
  */
 export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
   /**
@@ -270,7 +271,7 @@ export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
     }
   }
 
-  function buildRecipe(n, recipe) {
+  function buildRecipe(n, recipe, write = 'tnc2') {
     const args = recipe.args ?? {};
     const twice = UNIT_PAIRS.filter(([a, b]) => args[a] !== undefined && args[b] !== undefined);
     if (twice.length > 0) {
@@ -291,7 +292,15 @@ export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
     }
     const once = buildOnce(n, recipe);
     if (once.record) return once.record;
-    return { n, result: 'built', bytes: once.packet.toTnc2Bytes() };
+    // The packet is written as a TNC2 line, or an AX.25 frame when the case says so; the header is
+    // read back as it is written, so a path the form cannot carry is refused here, not at build.
+    try {
+      const bytes = write === 'ax25' ? once.packet.toAx25() : once.packet.toTnc2Bytes();
+      return { n, result: 'built', bytes, packet: once.packet };
+    } catch (e) {
+      if (e instanceof AprsEncodeError) return { n, result: 'refused', reason: e.message, refusal: e.code, packet: once.packet };
+      throw e;
+    }
   }
 
   return { buildRecipe };

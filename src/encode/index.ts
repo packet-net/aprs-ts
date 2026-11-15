@@ -1,14 +1,13 @@
-// The encoder: writes only what the spec allows and refuses anything else with a reason. Free
-// text is checked by decoding what was written: if the result does not read back as the same
-// data (a comment that would read as an altitude, say), the comment is tried straight after a
-// frequency, then after a `/` delimiter, and if neither helps the encoder refuses.
+// The encoder: writes only what the spec allows and refuses anything else with a reason. Every
+// information field leaves through `finish`, which ends in the read-back (`readback.ts`): the
+// bytes are decoded and compared with the data given, the next equivalent form is tried if they do
+// not match (a comment straight on, then after a `/`, then after a space), and the data is refused
+// if none matches. The header writers (`tnc2BytesOf`, `ax25Of`) read their own header back the same
+// way. Nothing decides whether either runs.
 
 import { binaryToBytes, bytesToBinary, decodeUtf8 } from '../bytes.js';
-import { decodeInformation } from '../decode/index.js';
-import { formatDiagnostic, ParseOptions } from '../diagnostics.js';
-import { isAprsIsAddress } from '../header.js';
-import { toNeutralData } from '../neutral.js';
-import type { RefusalCode } from '../codes.js';
+import { formatDiagnostic, ParseOptions, type Diagnostic } from '../diagnostics.js';
+import { AprsHeaderError, formatTnc2Header, isAprsIsAddress, parseAx25Frame, readHeaderText, type ParsedHeader } from '../header.js';
 import type { AprsData, CompressionType, PathEntry } from '../types.js';
 import { AprsEncodeError, collect, flag, givenTwiceReason, DEFAULT_DESTINATION, firstRefusal, refuse } from './common.js';
 import {
@@ -32,8 +31,9 @@ import {
   encodeThirdParty,
   encodeUserDefined,
 } from './other.js';
+import { readBack } from './readback.js';
 import { checkShape, guarded, pendingShapeFaults } from './shape.js';
-import { DEFAULT_COMPRESSION, encodeItem, encodeMicE, encodeObject, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
+import { encodeItem, encodeMicE, encodeObject, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
 
 export { AprsEncodeError, DEFAULT_DESTINATION } from './common.js';
 
@@ -151,112 +151,6 @@ function attemptOnce(data: AprsData, mode: CommentMode): Attempt {
   }
 }
 
-/** Numbers that agree within 1e-9, relative to the larger (absolute below 1). */
-function sameNumber(a: number, b: number): boolean {
-  const scale = Math.max(Math.abs(a), Math.abs(b));
-  return Math.abs(a - b) <= 1e-9 * (scale >= 1 ? scale : 1);
-}
-
-/** A way the written data would read back differently, with the refusal code it earns. */
-interface Problem {
-  readonly code: RefusalCode;
-  readonly text: string;
-}
-
-/** Fields that hold free text; one that reads back changed or lost is text that read as something else. */
-const FREE_TEXT_FIELDS: ReadonlySet<string> = new Set(['comment', 'text', 'data', 'project', 'software', 'unit', 'names', 'units', 'extra', 'status']);
-
-function problem(code: RefusalCode, text: string): Problem {
-  return { code, text };
-}
-
-/**
- * Where the written data would read back differently: strings, booleans and which fields are
- * present, and with `numbers` the numbers too. Numbers are left out otherwise, because a value
- * given with more precision than the format carries is written to the format's precision.
- */
-function shapeDifferences(a: unknown, b: unknown, path: string, out: Problem[], numbers: boolean): void {
-  if (typeof a === 'number' && typeof b === 'number') {
-    if (numbers && !sameNumber(a, b)) out.push(problem('invalid-nmea', `${path.replace(/\.$/, '')} would read back as ${a}`));
-    return;
-  }
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) out.push(problem('text-reads-as-field', `${path.replace(/\.$/, '')} would have ${a.length} items, not ${b.length}`));
-    else a.forEach((x, i) => shapeDifferences(x, b[i], `${path}${i}.`, out, numbers));
-    return;
-  }
-  if (a !== null && b !== null && typeof a === 'object' && typeof b === 'object') {
-    const ao = a as Record<string, unknown>;
-    const bo = b as Record<string, unknown>;
-    for (const k of new Set([...Object.keys(ao), ...Object.keys(bo)])) {
-      if (!(k in ao)) out.push(problem(FREE_TEXT_FIELDS.has(k) ? 'text-reads-as-field' : 'does-not-read-back', `${path}${k} would be lost`));
-      else if (!(k in bo)) out.push(problem('text-reads-as-field', `${path}${k} would appear`));
-      else shapeDifferences(ao[k], bo[k], `${path}${k}.`, out, numbers);
-    }
-    return;
-  }
-  if (a !== b) out.push(problem('text-reads-as-field', `${path.replace(/\.$/, '')} would read back as ${JSON.stringify(a)}`));
-}
-
-/** The data as it should read back: what the encoder fills in that the input may leave out. */
-function expected(data: AprsData, a: Attempt): AprsData {
-  let d = data;
-  if ((d.type === 'position' || d.type === 'object' || d.type === 'item') && d.compressed && a.compression) {
-    if (!d.compression) d = { ...d, compression: a.compression };
-  }
-  if (d.type === 'mic-e' && d.speedKnots === undefined) d = { ...d, speedKnots: 0 };
-  if (d.type === 'third-party' && d.packet.information.length === 0) {
-    // An inner packet written from its data: cs values with no compression type got the default.
-    const inner = d.packet.data;
-    if ((inner.type === 'position' || inner.type === 'object' || inner.type === 'item') && inner.compressed && !inner.compression) {
-      const w = inner.weather;
-      const carries =
-        inner.courseDegrees !== undefined ||
-        inner.speedKnots !== undefined ||
-        inner.rangeMiles !== undefined ||
-        (w !== undefined && (w.windDirectionDegrees !== undefined || w.windSpeedMph !== undefined));
-      if (carries) d = { ...d, packet: { ...d.packet, data: { ...inner, compression: DEFAULT_COMPRESSION } } };
-    }
-  }
-  return d;
-}
-
-function check(data: AprsData, a: Attempt): Problem[] {
-  const decoded = decodeInformation(binaryToBytes(a.binary), a.destination ?? DEFAULT_DESTINATION, ParseOptions.lenient);
-  const problems: Problem[] = [];
-  const bad = decoded.diagnostics.filter((d) => d.severity !== 'info');
-  if (bad.length > 0) problems.push(problem('text-reads-as-field', `it would read back with ${bad.map(formatDiagnostic).join(', ')}`));
-  if (decoded.data.type !== data.type) {
-    problems.push(problem('text-reads-as-field', `it would read back as ${decoded.data.type}`));
-    return problems;
-  }
-  // An NMEA sentence is written as it is, so everything read from it must be what the data says.
-  const shape: Problem[] = [];
-  const got = withoutInnerInfo(toNeutralData(decoded.data));
-  let want = withoutInnerInfo(toNeutralData(expected(data, a)));
-  // NMEA data is its sentence: a field left out is the one the sentence gives (vectors
-  // interpretations.md, NMEA data is its sentence).
-  if (data.type === 'nmea') want = { ...got, ...want };
-  shapeDifferences(got, want, '', shape, data.type === 'nmea');
-  // Whatever differs in a sentence read back is a field that disagrees with it.
-  for (const p of shape) problems.push(data.type === 'nmea' ? problem('invalid-nmea', p.text) : p);
-  return problems;
-}
-
-/**
- * A third-party packet's neutral data without its inner packet's `info` diagnostics: an info is
- * not a defect, so an inner packet that reads back with only those is written (vectors rulings, F10).
- */
-function withoutInnerInfo(n: Record<string, unknown>): Record<string, unknown> {
-  const packet = n.packet as Record<string, unknown> | undefined;
-  if (n.type !== 'third-party' || !packet || !Array.isArray(packet.diagnostics)) return n;
-  const kept = (packet.diagnostics as string[]).filter((d) => !d.startsWith('info:'));
-  const copy: Record<string, unknown> = { ...packet };
-  if (kept.length > 0) copy.diagnostics = kept;
-  else delete copy.diagnostics;
-  return { ...n, packet: copy };
-}
-
 /**
  * Encodes data as an information field. Mic-E also gives the destination address it computed.
  * Throws `AprsEncodeError`, with the reason, for anything the spec does not allow.
@@ -265,18 +159,27 @@ export function encodeInformation(data: AprsData): EncodedInformation {
   return guarded(() => encodeShaped(checkShape(data)));
 }
 
-/** Whether a Mic-E attempt reads back with the frequency it was given, fields and all. */
+/** Whether the attempt reads back with the frequency it was given, fields and all (the choice between equivalent forms of a Mic-E comment). */
 function readsBackWithItsFrequency(data: AprsData, a: Attempt): boolean {
-  const given = (data as { frequency?: unknown }).frequency;
-  if (given === undefined) return false;
-  const got = toNeutralData(decodeInformation(binaryToBytes(a.binary), a.destination ?? DEFAULT_DESTINATION, ParseOptions.lenient).data) as { frequency?: unknown };
-  const want = toNeutralData(expected(data, a)) as { frequency?: unknown };
-  return JSON.stringify(got.frequency) === JSON.stringify(want.frequency);
+  if ((data as { frequency?: unknown }).frequency === undefined) return false;
+  return readBack(data, a.binary, a.destination).every((p) => !p.text.startsWith('frequency'));
 }
 
-function encodeShaped(data: AprsData): EncodedInformation {
-  const first = attempt(data, 'plain');
-  let problems = check(data, first);
+/** Information fields that passed the read-back: only `finish` makes one, and the internal writers accept no other. */
+const readBackPassed = new WeakSet<object>();
+
+/** Refuses an information field that did not come out of `encodeInformation`: the read-back is not optional. */
+export function passedReadBack(encoded: EncodedInformation): EncodedInformation {
+  if (!readBackPassed.has(encoded)) throw new AprsEncodeError('an information field that did not pass the read-back', 'does-not-read-back');
+  return encoded;
+}
+
+/**
+ * The one place bytes leave the encoder: the final read-back, then the size, in that order. Every
+ * public function that writes an information field from data ends here, whatever the report.
+ */
+function finish(data: AprsData, first: Attempt): EncodedInformation {
+  let problems = readBack(data, first.binary, first.destination);
   let chosen = first;
   if (problems.length > 0 && typeof (data as { comment?: unknown }).comment === 'string') {
     // The comment would read as something else: try it straight after a frequency, then after a
@@ -292,7 +195,7 @@ function encodeShaped(data: AprsData): EncodedInformation {
       } catch (e) {
         if (!(e instanceof AprsEncodeError)) throw e;
       }
-      if (next && next.binary !== first.binary && check(data, next).length === 0) {
+      if (next && next.binary !== first.binary && readBack(data, next.binary, next.destination).length === 0) {
         chosen = next;
         problems = [];
         break;
@@ -305,7 +208,13 @@ function encodeShaped(data: AprsData): EncodedInformation {
   if (chosen.binary.length > MAX_INFORMATION_BYTES)
     throw new AprsEncodeError(`the information field is ${chosen.binary.length} bytes; at most ${MAX_INFORMATION_BYTES} are allowed`, 'information-field-too-long');
   const information = binaryToBytes(chosen.binary);
-  return chosen.destination !== undefined ? { information, destination: chosen.destination } : { information };
+  const encoded: EncodedInformation = chosen.destination !== undefined ? { information, destination: chosen.destination } : { information };
+  readBackPassed.add(encoded);
+  return encoded;
+}
+
+function encodeShaped(data: AprsData): EncodedInformation {
+  return finish(data, attempt(data, 'plain'));
 }
 
 /** A packet to encode. */
@@ -313,13 +222,18 @@ export interface PacketToEncode {
   source: string;
   /** The destination (tocall); ignored for Mic-E, which computes it. Defaults to `DEFAULT_DESTINATION` (`APZ001`). */
   destination?: string;
-  /** Digipeater path, e.g. `['WIDE1-1', 'WIDE2-1']`; a trailing `*` marks an entry used. */
+  /** Digipeater path, e.g. `['WIDE1-1', 'WIDE2-1']`; a trailing `*` marks an entry used, on every used entry. */
   path?: readonly (string | PathEntry)[];
   data: AprsData;
 }
 
-function pathText(entry: string | PathEntry): string {
-  return typeof entry === 'string' ? entry : entry.used ? `${entry.address}*` : entry.address;
+/** A path as entries: a string ending in `*` is a used entry, as the neutral header form writes it. */
+export function pathEntries(path: readonly (string | PathEntry)[]): PathEntry[] {
+  return path.map((e) => (typeof e !== 'string' ? { address: e.address, used: e.used } : e.endsWith('*') ? { address: e.slice(0, -1), used: true } : { address: e, used: false }));
+}
+
+function pathText(entry: PathEntry): string {
+  return entry.used ? `${entry.address}*` : entry.address;
 }
 
 /** The destination to check before the data is encoded: a Mic-E one is computed, and always valid. */
@@ -327,25 +241,57 @@ function givenDestination(p: PacketToEncode): string {
   return (p.data as { type?: unknown } | undefined)?.type === 'mic-e' ? DEFAULT_DESTINATION : (p.destination ?? DEFAULT_DESTINATION);
 }
 
-function resolve(p: PacketToEncode): { destination: string; information: Uint8Array; path: string[] } {
-  const encoded = encodeInformation(p.data);
+function resolve(p: PacketToEncode): { destination: string; information: Uint8Array; path: PathEntry[] } {
+  const encoded = passedReadBack(encodeInformation(p.data));
   const destination = encoded.destination ?? p.destination ?? DEFAULT_DESTINATION;
-  return { destination, information: encoded.information, path: (p.path ?? []).map(pathText) };
+  return { destination, information: encoded.information, path: pathEntries(p.path ?? []) };
 }
 
 /** Refuses a source, destination or path entry that APRS-IS does not allow as an address. */
-export function checkHeaderAddresses(source: string, destination: string, path: readonly string[]): void {
+export function checkHeaderAddresses(source: string, destination: string, path: readonly (string | PathEntry)[]): void {
   if (!isAprsIsAddress(source)) refuse('invalid-address', `the source ${JSON.stringify(source)} is not a valid address`);
   if (!isAprsIsAddress(destination)) refuse('invalid-address', `the destination ${JSON.stringify(destination)} is not a valid address`);
-  for (const e of path) if (!isAprsIsAddress(e.replace(/\*$/, ''))) refuse('invalid-address', `the path entry ${JSON.stringify(e)} is not a valid address`);
+  for (const e of pathEntries(path)) if (!isAprsIsAddress(e.address)) refuse('invalid-address', `the path entry ${JSON.stringify(pathText(e))} is not a valid address`);
 }
 
-/** A TNC2 line from a header and an information field already encoded; the addresses are not checked. */
-export function tnc2BytesOf(source: string, destination: string, path: readonly string[], information: Uint8Array): Uint8Array {
-  const header = [`${source}>${destination}`, ...path].join(',') + ':';
-  const out = new Uint8Array(header.length + information.length);
-  out.set(binaryToBytes(header), 0);
-  out.set(information, header.length);
+/**
+ * Where a header read back differs from the header given: source, destination and path entry by
+ * entry, each with its used mark, and no diagnostic. A decoded packet's empty destination (a
+ * tolerated defect) is the one thing a header of a packet already held may carry that a header
+ * written from data never does.
+ */
+function headerDifference(read: { source: string; destination: string; path: readonly PathEntry[]; diagnostics: readonly Diagnostic[] }, source: string, destination: string, path: readonly PathEntry[]): string | undefined {
+  if (read.source !== source) return `the source would read back as ${JSON.stringify(read.source)}`;
+  if (read.destination !== destination) return `the destination would read back as ${JSON.stringify(read.destination)}`;
+  if (read.path.length !== path.length) return `the path would have ${read.path.length} entries, not ${path.length}`;
+  for (let i = 0; i < path.length; i++) {
+    const given = path[i]!;
+    const got = read.path[i]!;
+    if (got.address !== given.address || got.used !== given.used)
+      return `the path entry ${JSON.stringify(pathText(given))} would read back as ${JSON.stringify(pathText(got))}, since an entry before a used one is used`;
+  }
+  const bad = read.diagnostics.filter((d) => !(destination === '' && d.code === 'empty-destination'));
+  if (bad.length > 0) return `the header would read back with ${bad.map(formatDiagnostic).join(', ')}`;
+  return undefined;
+}
+
+/**
+ * A TNC2 / APRS-IS line from a header and an information field: the header is written (`*` on the
+ * last used entry only) and read back, and refused `tnc2-cannot-carry` if it reads back as another
+ * header. The information field is written as it stands: an encoder's has passed its own
+ * read-back, a received packet's is passed through. The addresses are not checked.
+ */
+export function tnc2BytesOf(source: string, destination: string, path: readonly (string | PathEntry)[], information: Uint8Array): Uint8Array {
+  const entries = pathEntries(path);
+  const header = formatTnc2Header(source, destination, entries);
+  const read = readHeaderText(header, ParseOptions.lenient);
+  if (read === undefined) refuse('tnc2-cannot-carry', `the header ${JSON.stringify(header)} would not read back`);
+  const why = headerDifference(read, source, destination, entries);
+  if (why !== undefined) refuse('tnc2-cannot-carry', `a TNC2 line cannot carry this header: ${why}`);
+  const headerBytes = binaryToBytes(header + ':');
+  const out = new Uint8Array(headerBytes.length + information.length);
+  out.set(headerBytes, 0);
+  out.set(information, headerBytes.length);
   return out;
 }
 
@@ -360,7 +306,8 @@ export function tnc2TextOf(bytes: Uint8Array): string {
 export function encodeTnc2Bytes(p: PacketToEncode): Uint8Array {
   return guarded(() => {
     // The header is written first, so its faults come before any in the data.
-    checkHeaderAddresses(p.source, givenDestination(p), (p.path ?? []).map(pathText));
+    checkHeaderAddresses(p.source, givenDestination(p), p.path ?? []);
+    tnc2BytesOf(p.source, givenDestination(p), p.path ?? [], new Uint8Array(0));
     const r = resolve(p);
     checkHeaderAddresses(p.source, r.destination, r.path);
     return tnc2BytesOf(p.source, r.destination, r.path, r.information);
@@ -387,18 +334,29 @@ function ax25Address(text: string, last: boolean, flag: boolean): number[] {
   return out;
 }
 
-/** An AX.25 UI frame from a header and an information field already encoded. */
+/**
+ * An AX.25 UI frame from a header and an information field: the addresses are written (the H bit
+ * on every used entry) and read back, and refused `ax25-cannot-carry` if they read back as
+ * another header. The information field is written as it stands, as for `tnc2BytesOf`.
+ */
 export function ax25Of(source: string, destination: string, path: readonly (string | PathEntry)[], information: Uint8Array): Uint8Array {
-  if (path.length > 8) refuse('ax25-cannot-carry', 'AX.25 allows at most 8 digipeaters');
+  const entries = pathEntries(path);
+  if (entries.length > 8) refuse('ax25-cannot-carry', 'AX.25 allows at most 8 digipeaters');
   const bytes: number[] = [];
   bytes.push(...ax25Address(destination, false, true));
-  bytes.push(...ax25Address(source, path.length === 0, false));
-  path.forEach((e, i) => {
-    const address = typeof e === 'string' ? e.replace(/\*$/, '') : e.address;
-    const used = typeof e === 'string' ? e.endsWith('*') : e.used;
-    bytes.push(...ax25Address(address, i === path.length - 1, used));
-  });
-  bytes.push(0x03, 0xf0, ...information);
+  bytes.push(...ax25Address(source, entries.length === 0, false));
+  entries.forEach((e, i) => bytes.push(...ax25Address(e.address, i === entries.length - 1, e.used)));
+  bytes.push(0x03, 0xf0);
+  let read: ParsedHeader;
+  try {
+    read = parseAx25Frame(Uint8Array.from(bytes), ParseOptions.lenient);
+  } catch (e) {
+    if (e instanceof AprsHeaderError) refuse('ax25-cannot-carry', `the addresses would not read back: ${e.message}`);
+    throw e;
+  }
+  const why = headerDifference(read, source, destination, entries);
+  if (why !== undefined) refuse('ax25-cannot-carry', `an AX.25 frame cannot carry this header: ${why}`);
+  bytes.push(...information);
   return Uint8Array.from(bytes);
 }
 
@@ -408,7 +366,7 @@ export function encodeAx25(p: PacketToEncode): Uint8Array {
     // The header is written first, so what AX.25 cannot carry comes before any fault in the data.
     ax25Of(p.source, givenDestination(p), p.path ?? [], new Uint8Array(0));
     const r = resolve(p);
-    return ax25Of(p.source, r.destination, p.path ?? [], r.information);
+    return ax25Of(p.source, r.destination, r.path, r.information);
   });
 }
 

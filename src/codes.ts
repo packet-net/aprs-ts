@@ -257,8 +257,8 @@ export type RefusalCode =
 /** What each refusal code means. */
 export const REFUSAL_MEANINGS: Readonly<Record<RefusalCode, string>> = {
   'invalid-address': "A header address (source, destination, path entry, or a third-party one) is not 1-9 letters, digits or `-` in TNC2 text.",
-  'ax25-cannot-carry': "An AX.25 frame cannot carry the header: a call over 6 characters or in lower case, an SSID over 15 or written with a leading zero, more than 8 path entries.",
-  'tnc2-cannot-carry': "A TNC2 line cannot carry the packet: its information field is not UTF-8 text.",
+  'ax25-cannot-carry': "An AX.25 frame cannot carry the header: a call over 6 characters or in lower case, an SSID over 15 or written with a leading zero or as -0, more than 8 path entries, a path entry not marked used before one that is (it reads back used).",
+  'tnc2-cannot-carry': "A TNC2 line cannot carry the packet: its information field is not UTF-8 text, or its path has an entry not marked used before one that is, which reads back used.",
   'invalid-third-party-header': "A third-party packet's inner header cannot be written as received: a bad inner address, used markers out of order, or a tolerated defect that is part of its data.",
   'invalid-addressee': "A message, bulletin, NWS bulletin, telemetry metadata or directed query addressee is empty, over 9 characters, holds a space or `:`, or is not the form its report needs (`NWS-`/`NWS_`, a group bulletin's digit).",
   'invalid-name': "An object or item name is the wrong length or holds a character a name cannot.",
@@ -266,9 +266,9 @@ export const REFUSAL_MEANINGS: Readonly<Record<RefusalCode, string>> = {
   'padding-space': "Text starts or ends with a space that would be read back as padding (an object name, a capability value).",
   'too-long': "Free text or a list is longer than its field allows (message text over 67 characters, a project title over 23, more than 13 names, more than 5 analog values).",
   'information-field-too-long': "The information field as written is over 256 bytes (APRS12c ch. 3), and nothing else is wrong with the data: checked last, on the bytes written.",
-  'malformed': "Text in a fixed-form field is not that form: a locator, a bit sense, telemetry bits, signpost text, a capability token, a weather extra field, too few telemetry values.",
+  'malformed': "Text in a fixed-form field is not that form: a locator, a bit sense, telemetry bits, signpost text, a capability token, too few telemetry values.",
   'invalid-character': "Free text holds a character its field cannot carry: a control character (a byte below 0x20, a line break included, or 0x7F), a `{` in message-like text, or a character outside printable ASCII where only that is allowed.",
-  'text-reads-as-field': "Free text would read back as a structured element (an altitude, a `!DAO!`, telemetry, a frequency, PHG/RNG/DFS, a timestamp or locator, a Mic-E device suffix, a weather field), and no clean form avoids it.",
+  'text-reads-as-field': "Free text would read back as a structured element (an altitude, a `!DAO!`, telemetry, a frequency, PHG/RNG/DFS, a timestamp or locator, a Mic-E device suffix, a weather field; a weather report's software type, unit and extra fields are free text), and no clean form avoids it.",
   'not-a-number': "A value is NaN or infinite.",
   'value-out-of-range': "A number is outside what its field holds, after rounding (latitude, speed, gust, snowfall, range, footprint, bearing, telemetry sequence, PHG and DFS digits, an SSID).",
   'value-has-no-form': "A value inside the range that no form reads back as: a course of 0 in Mic-E or compressed bytes, a humidity of 0, Mic-E telemetry 255, `T#MIC` with an empty first channel, a frequency between bands.",
@@ -282,7 +282,7 @@ export const REFUSAL_MEANINGS: Readonly<Record<RefusalCode, string>> = {
   'invalid-code': "An enumerated value outside its set: a Mic-E message with mixed bits or custom over 6, a Mic-E type code, a beam heading or power code, a query type, a DAO datum, a compression type, a tone type.",
   'invalid-nmea': "An NMEA sentence is malformed, its checksum does not match, or a field given beside it disagrees with it.",
   'not-encodable': "The call has nothing it can write: undecoded data, or Mic-E through a call that cannot return the destination.",
-  'does-not-read-back': "Fallback: the library's own read-back check found the bytes decode to different data and no rule above names why.",
+  'does-not-read-back': "Fallback: the read-back every encoder ends with (README, Read-back) found the bytes decode to different data, and no rule above names why.",
 };
 
 /** Every refusal code. */

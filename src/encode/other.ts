@@ -39,7 +39,9 @@ function addressee(a: string): string {
   return a.padEnd(9, ' ');
 }
 
-function messageId(id: string | undefined, replyAck: string | undefined): string {
+function messageId(given: string | undefined, replyAck: string | undefined): string {
+  // Empty and absent are one value: an empty message ID is no message ID.
+  const id = given === '' ? undefined : given;
   if (id === undefined) {
     if (replyAck !== undefined) {
       // A reply-ack wrong on its own is wrong whatever else is given.
@@ -131,7 +133,8 @@ export function encodeDirectedQuery(d: DirectedQuery): string {
   // Absent text is empty text, so a query with no type has an invalid one (vectors interpretations.md).
   if (!/^(?:[A-Z]+|PING\?)$/.test(d.queryType)) flag('invalid-code', 'a query type is upper-case letters');
   let out = `:${addressee(d.addressee)}:?${d.queryType}`;
-  if (d.target !== undefined) {
+  // An empty target is no target.
+  if (d.target !== undefined && d.target !== '') {
     if (!/^[A-Za-z0-9-]{1,9}$/.test(d.target)) flag('invalid-addressee', 'a query target is one callsign');
     // A type the spec defines is followed straight by the target, an APRSH target padded to 9
     // characters; any other type has no fixed length, so its target follows one space.

@@ -14,7 +14,7 @@
 // `AprsEncodeError` that says why.
 
 import { AprsEncodeError, DEFAULT_DESTINATION, firstRefusal, markGivenTwice, markMicEAltitudeBytesOnly, nearest, numberFault, refuse } from './encode/common.js';
-import { ax25Of, checkHeaderAddresses, encodeInformation, tnc2BytesOf, tnc2TextOf, wrapKiss } from './encode/index.js';
+import { ax25Of, checkHeaderAddresses, encodeInformation, passedReadBack, tnc2BytesOf, tnc2TextOf, wrapKiss } from './encode/index.js';
 import { symbolOf } from './symbols.js';
 import type {
   AprsData,
@@ -63,21 +63,16 @@ function pathEntryOf(entry: string | PathEntry): PathEntry {
   return entry.endsWith('*') ? { address: entry.slice(0, -1), used: true } : { address: entry, used: false };
 }
 
-function pathText(entry: PathEntry): string {
-  return entry.used ? `${entry.address}*` : entry.address;
-}
-
 /** Encodes the data and checks the header's addresses, so a `BuiltPacket` can always be written. */
 function built(header: Header, data: AprsData): BuiltPacket {
   const path = header.path.map((e) => Object.freeze({ ...e }));
-  const text = path.map(pathText);
   // The header is written first, so its faults come before any in the data (vectors README,
   // Refusal reasons); a Mic-E destination is computed, and always a valid address.
   const given = data.type === 'mic-e' ? DEFAULT_DESTINATION : (header.destination ?? DEFAULT_DESTINATION);
-  checkHeaderAddresses(header.source, given, text);
-  const encoded = encodeChecked(data);
+  checkHeaderAddresses(header.source, given, path);
+  const encoded = passedReadBack(encodeChecked(data));
   const destination = encoded.destination ?? header.destination ?? DEFAULT_DESTINATION;
-  checkHeaderAddresses(header.source, destination, text);
+  checkHeaderAddresses(header.source, destination, path);
   const information = encoded.information;
   const frame = (): Uint8Array => ax25Of(header.source, destination, path, information);
   return Object.freeze({
@@ -86,8 +81,8 @@ function built(header: Header, data: AprsData): BuiltPacket {
     path: Object.freeze(path),
     data,
     information,
-    toTnc2: () => tnc2TextOf(tnc2BytesOf(header.source, destination, text, information)),
-    toTnc2Bytes: () => tnc2BytesOf(header.source, destination, text, information),
+    toTnc2: () => tnc2TextOf(tnc2BytesOf(header.source, destination, path, information)),
+    toTnc2Bytes: () => tnc2BytesOf(header.source, destination, path, information),
     toAx25: frame,
     toKiss: (port = 0) => wrapKiss(frame(), port),
   });

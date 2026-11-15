@@ -19,7 +19,11 @@
 //
 // build: a builder recipe per line, of which only the keys the recipe gives are passed on (an
 // absent one is never filled in, so the builder's own defaults show); writes
-//   {"n", "result": "built|refused|unsupported", "tnc2", "again", "reason", "refusal"}
+//   {"n", "result": "built|refused|unsupported", "tnc2", "again", "reason", "refusal",
+//    "ax25", "ax25_refusal"}
+// where ax25 is the same packet written as an AX.25 frame (hex), or "refused" with its code; the
+// library reads the header of the line and of the frame back as it writes them, so a path one form
+// cannot carry is a refusal (tnc2-cannot-carry, ax25-cannot-carry), not a record the tool judges.
 //
 // This library has no fixed capacity, so it never writes the `implementation-limit` result or
 // diagnostic that the README gives a library that has one.
@@ -299,6 +303,8 @@ function lostKeys(a, b, out) {
         if (k === 'message_id' && (x.type === 'ack' || x.type === 'reject')) continue;
         if (k === 'analog' && x.type === 'telemetry' && Array.isArray(x[k]) && x[k].length === 0) continue;
         if (k === 'capabilities' && x.type === 'capabilities' && Array.isArray(x[k]) && x[k].length === 0) continue;
+        // An empty third-party path is no path: empty and absent are one value (vectors README, Read-back).
+        if (k === 'path' && Array.isArray(x[k]) && x[k].length === 0 && 'data' in x) continue;
         const child = { a: x[k], b: y?.[k], parent: node, key: k };
         if (!y || typeof y !== 'object' || !(k in y)) out.push(spell(child));
         else stack.push(child);
@@ -358,12 +364,26 @@ function encodeRecord(index, line) {
 
 const { buildRecipe } = recipeBuilder({ Aprs, AprsEncodeError, refusalRank });
 
+/** The packet built, written as an AX.25 frame: `{ ax25 }` as hex, or `refused` with its reason code. */
+function frameOf(packet) {
+  try {
+    return { ax25: bytesToHex(packet.toAx25()) };
+  } catch (e) {
+    if (e instanceof AprsEncodeError) return { ax25: 'refused', ax25_refusal: e.code };
+    throw e;
+  }
+}
+
 function buildRecord(index, line) {
   const recipe = parseJson(line);
   const n = recipe.n ?? index;
-  const r = buildRecipe(n, recipe);
-  if (r.result !== 'built') return r;
-  return { n, result: 'built', tnc2: bytesToHex(r.bytes), again: decodedAgain(r.bytes, true) };
+  const { packet, bytes, ...r } = buildRecipe(n, recipe);
+  // The line and the frame are each written by the library, which reads their headers back: a
+  // header one form cannot carry is refused there (tnc2-cannot-carry or ax25-cannot-carry), and
+  // whatever the library gives is the record, never the tool's own judgement.
+  const frame = packet ? frameOf(packet) : {};
+  if (r.result !== 'built') return { ...r, ...frame };
+  return { n, result: 'built', tnc2: bytesToHex(bytes), again: decodedAgain(bytes, true), ...frame };
 }
 
 // ---- the loop

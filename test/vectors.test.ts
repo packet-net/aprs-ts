@@ -158,7 +158,7 @@ function encodeCheck(c: Case): string[] {
 const { buildRecipe } = recipeBuilder({ Aprs, AprsEncodeError, refusalRank });
 
 function buildCheck(c: Case): string[] {
-  const r = buildRecipe(0, c.input.build);
+  const r = buildRecipe(0, c.input.build, c.input.write === 'ax25' ? 'ax25' : 'tnc2');
   if (r.result === 'unsupported') return [`the recipe is unsupported: ${r.reason}`];
   if (r.result === 'refused') {
     if (!c.expect.refused) return [`the builder refused (${r.refusal}): ${r.reason}`];
@@ -166,7 +166,8 @@ function buildCheck(c: Case): string[] {
     return want === undefined || want === r.refusal ? [] : [`refused with ${r.refusal} (${r.reason}), want ${want}`];
   }
   if (c.expect.refused) return [`expected a refusal, built ${JSON.stringify(latin1(r.bytes))}`];
-  const want = c.expect.tnc2_hex !== undefined ? hexToBytes(c.expect.tnc2_hex as string) : encodeUtf8(c.expect.tnc2 as string);
+  const want =
+    c.input.write === 'ax25' ? hexToBytes(c.expect.ax25_hex as string) : c.expect.tnc2_hex !== undefined ? hexToBytes(c.expect.tnc2_hex as string) : encodeUtf8(c.expect.tnc2 as string);
   return hex(want) === hex(r.bytes) ? [] : [`built ${JSON.stringify(latin1(r.bytes))}, want ${JSON.stringify(latin1(want))}`];
 }
 

@@ -1,10 +1,8 @@
 // What a program does with a packet it received: ask about its diagnostics, write it out again as
 // received, and read the values behind a PHG's codes.
 
-import { encodeUtf8 } from './bytes.js';
-import { ax25Of, tnc2TextOf } from './encode/index.js';
+import { ax25Of, tnc2BytesOf, tnc2TextOf } from './encode/index.js';
 import { guarded } from './encode/shape.js';
-import { formatTnc2Header } from './header.js';
 import type { AprsPacket, Phg } from './types.js';
 
 /** Whether decoding the packet found an error. */
@@ -19,18 +17,15 @@ export function hasWarnings(packet: AprsPacket): boolean {
 
 /**
  * A received packet as the bytes of a TNC2 / APRS-IS line: its header, then the information
- * field exactly as received. Nothing is checked or re-encoded: this writes out a packet the program
- * already holds, it is not an encoder, so it makes no size check (a received field over 256 bytes
- * is written as it came).
+ * field exactly as received. The information field is not re-encoded or checked (this writes out a
+ * packet the program already holds, it is not an encoder, so it makes no size check: a received
+ * field over 256 bytes is written as it came), but the header written is read back like any
+ * other.
+ *
+ * @throws AprsEncodeError (`tnc2-cannot-carry`) when the header reads back as another one.
  */
 export function packetToTnc2Bytes(packet: AprsPacket): Uint8Array {
-  return guarded(() => {
-    const header = encodeUtf8(`${formatTnc2Header(packet.source, packet.destination, packet.path)}:`);
-    const out = new Uint8Array(header.length + packet.information.length);
-    out.set(header, 0);
-    out.set(packet.information, header.length);
-    return out;
-  });
+  return guarded(() => tnc2BytesOf(packet.source, packet.destination, packet.path, packet.information));
 }
 
 /**
