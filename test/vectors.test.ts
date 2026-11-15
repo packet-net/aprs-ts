@@ -49,6 +49,8 @@ interface KnownDifference {
 const known: KnownDifference[] = JSON.parse(readFileSync(new URL('./known-differences.json', import.meta.url), 'utf8')).differences;
 const knownReason = (id: string, check: string): string | undefined => known.find((k) => k.id === id && k.check === check)?.reason;
 const tolerable = loadTolerable();
+let toleranceRan = 0;
+const toleranceSkipped: string[] = [];
 
 function check(id: string, name: string, body: () => void): void {
   const reason = knownReason(id, name);
@@ -199,6 +201,15 @@ for (const { file, cases } of loadCases()) {
       check(c.id, 'strict', () => fail(checkStrict(decode(input, ParseOptions.strict), c)));
       const code = singleTolerance(c, tolerable);
       if (code !== undefined) {
+        // Skipped when strict is rejected by a code other than the one tolerance (README, "Checking a case").
+        const strictCode = c.strict !== undefined && c.strict !== 'same' ? c.strict.rejected_by : undefined;
+        if (strictCode !== undefined && strictCode !== code) {
+          toleranceSkipped.push(c.id);
+        } else {
+          toleranceRan++;
+        }
+      }
+      if (code !== undefined && !toleranceSkipped.includes(c.id)) {
         check(c.id, 'tolerance', () => fail(checkStrict(decode(input, ParseOptions.lenient.without(code)), c)));
       }
       if (c.reencode !== undefined) {
@@ -207,3 +218,13 @@ for (const { file, cases } of loadCases()) {
     }
   });
 }
+
+// How many cases the tolerance check ran on and which it left out: only one case leaves it (the
+// vectors' RULED.md), so a mistake that skips too many shows here.
+describe('tolerance check coverage', () => {
+  it('skips only the Mic-E telemetry case', () => {
+    console.log(`tolerance check ran on ${toleranceRan} cases, skipped ${toleranceSkipped.length}`);
+    expect(toleranceSkipped).toEqual(['mic-e/telemetry-left-once-an-altitude-is-lifted-then-a-spaced-comment']);
+    expect(toleranceRan).toBeGreaterThan(0);
+  });
+});

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-A `/` or `@` report whose timestamp is not valid but whose seventh byte is `z`, `/` or `h` and is followed by an uncompressed position (`@R30549z2831.07N/08142.92W_...`) is now read after the seven bytes, with `malformed-timestamp`, instead of reading the garbled bytes as a compressed position. A compressed position after the seven bytes does not take part, and every other report decodes as before. Vectors pinned at b118424e59fb62194ded6552c1796ad9280f188d (aprs-vectors, branch `round-5`).
+A `/` or `@` report whose timestamp is not valid but whose seventh byte is `z`, `/` or `h` and is followed by an uncompressed position (`@R30549z2831.07N/08142.92W_...`) is now read after the seven bytes, with `malformed-timestamp`, instead of reading the garbled bytes as a compressed position. A compressed position after the seven bytes does not take part, and every other report decodes as before. Vectors pinned at 201f7b26182d02894b53ada5493c363a692db889 (aprs-vectors, branch `round-5`). The vectors runner skips the tolerance check for a case whose strict result is rejected by a code other than the one tolerance (one case, `mic-e/telemetry-left-once-an-altitude-is-lifted-then-a-spaced-comment`, which already passed), and counts the cases it runs on (725).
 
 ## 1.2.0 (2026-11-14)
 
