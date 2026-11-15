@@ -73,7 +73,8 @@ const HEADS: Record<string, string> = {
   'mic-e': 'N0CALL>S32UVT:`(_fn"Oj/',
   'mic-e after a locator': 'N0CALL>S32UVT:`(_fn"Oj/>IO91/G ',
 };
-const ELEMENTS = ['{', 'PHG1', '|!!|', '/A=000001', '!W12!', '"4e}', '}', '/A=000100}'];
+// The last four are runs of bars whose pairs mostly do not enclose a block (R27: telemetry is the last valid block).
+const ELEMENTS = ['{', 'PHG1', '|!!|', '/A=000001', '!W12!', '"4e}', '}', '/A=000100}', '|', '||x', '|!!!!!!!!!!!!!!!!!|', '|a b'];
 const SMALL = 40_000;
 const LARGE = 160_000;
 

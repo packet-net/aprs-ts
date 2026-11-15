@@ -443,3 +443,21 @@ describe('a voice offset', () => {
     expect(code(() => encodeInformation(at2(600)))).toBe('written');
   });
 });
+
+describe('base-91 telemetry is the last valid block (R27, aprs-vectors#32)', () => {
+  const read = (info: string) => decodeTnc2(`N0CALL>APZ001:${info}`).data as { telemetry?: unknown; comment?: string };
+  it('takes the last pair of neighbouring bars that encloses a valid block, and leaves other bars as text', () => {
+    expect(read('!5130.00N/00006.00W>|!!!!|| IGate |144.190| x')).toMatchObject({ telemetry: { sequence: 0, analog: [0] }, comment: '| IGate |144.190| x' });
+    expect(read('!5130.00N/00006.00W>x|!!!!|y|!"!#|z')).toMatchObject({ telemetry: { sequence: 1, analog: [2] }, comment: 'x|!!!!|yz' });
+    expect(read('!5130.00N/00006.00W>x||y')).toMatchObject({ comment: 'x||y' });
+    expect(read('!5130.00N/00006.00W>x||y').telemetry).toBeUndefined();
+  });
+  it('refuses a comment holding a valid block when the data has no telemetry, whatever bars follow', () => {
+    expect(code(() => encodeInformation({ type: 'position', ...at, comment: '|!!!!| a |b c|' } as AprsData))).toBe('text-reads-as-field');
+  });
+  it('writes data with telemetry and a block in its comment so the telemetry is the last block', () => {
+    const data = { type: 'position', ...at, comment: 'x|!!!!|y', telemetry: { sequence: 1, analog: [2] } } as AprsData;
+    const back = read(text(encodeInformation(data).information));
+    expect(back).toMatchObject({ telemetry: { sequence: 1, analog: [2] }, comment: 'x|!!!!|y' });
+  });
+});

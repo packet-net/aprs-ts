@@ -369,22 +369,40 @@ interface TelemetryFound {
   telemetry: CommentTelemetry;
 }
 
+/**
+ * The telemetry is the LAST pair of neighbouring bars that encloses a valid block: 4 to 14 bytes, an
+ * even number, each 0x21 to 0x7B (vectors R27). Bars around anything else are text. One scan over
+ * the bars and at most 15 bytes looked at per pair, so linear in the text.
+ */
 function findCommentTelemetry(s: string): TelemetryFound | undefined {
-  const last = s.lastIndexOf('|');
-  if (last <= 0) return undefined;
-  const prev = s.lastIndexOf('|', last - 1);
-  if (prev < 0) return undefined;
-  const body = s.slice(prev + 1, last);
-  if (body.length < 4 || body.length > 14 || body.length % 2 !== 0) return undefined;
-  for (let k = 0; k < body.length; k++) if (!isBase91(body[k])) return undefined;
-  const values: number[] = [];
-  for (let k = 0; k < body.length; k += 2) values.push(base91Value(body.substr(k, 2)));
-  const sequence = values[0]!;
-  const rest = values.slice(1);
-  // The binary value is eight channels; bits 9-13 are reserved and ignored (APRS12c ch. 13).
-  const telemetry: CommentTelemetry =
-    rest.length === 6 ? { sequence, analog: rest.slice(0, 5), digital: rest[5]! & 0xff } : { sequence, analog: rest };
-  return { start: prev, end: last + 1, telemetry };
+  let last = s.lastIndexOf('|');
+  while (last > 0) {
+    const prev = s.lastIndexOf('|', last - 1);
+    if (prev < 0) return undefined;
+    const length = last - prev - 1;
+    if (length >= 4 && length <= 14 && length % 2 === 0) {
+      let valid = true;
+      for (let k = prev + 1; k < last; k++) {
+        if (!isBase91(s[k]!)) {
+          valid = false;
+          break;
+        }
+      }
+      if (valid) {
+        const body = s.slice(prev + 1, last);
+        const values: number[] = [];
+        for (let k = 0; k < body.length; k += 2) values.push(base91Value(body.substr(k, 2)));
+        const sequence = values[0]!;
+        const rest = values.slice(1);
+        // The binary value is eight channels; bits 9-13 are reserved and ignored (APRS12c ch. 13).
+        const telemetry: CommentTelemetry =
+          rest.length === 6 ? { sequence, analog: rest.slice(0, 5), digital: rest[5]! & 0xff } : { sequence, analog: rest };
+        return { start: prev, end: last + 1, telemetry };
+      }
+    }
+    last = prev;
+  }
+  return undefined;
 }
 
 // ---- data extensions
