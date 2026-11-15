@@ -145,7 +145,8 @@ function weatherN(w: Weather): Neutral {
 function positionedN(o: Neutral, d: PositionedFields): void {
   o.latitude = d.latitude;
   o.longitude = d.longitude;
-  put(o, 'ambiguity', d.ambiguity);
+  // An ambiguity of 0 is none: absent in the data form.
+  put(o, 'ambiguity', d.ambiguity === 0 ? undefined : d.ambiguity);
   o.symbol = sym(d.symbol);
   put(o, 'compressed', d.compressed);
   if (d.compression) o.compression = compressionN(d.compression);
@@ -201,7 +202,8 @@ function toNeutralLevel(d: AprsData): Neutral {
       put(o, 'device_suffix', d.deviceSuffix);
       put(o, 'locator', d.locator);
       if (d.legacyTelemetry && d.legacyTelemetry.length > 0) o.legacy_telemetry = [...d.legacyTelemetry];
-      put(o, 'destination_ssid', d.destinationSsid);
+      // An SSID of 0 is no suffix: absent in the data form.
+      put(o, 'destination_ssid', d.destinationSsid === 0 ? undefined : d.destinationSsid);
       positionedN(o, d);
       break;
     case 'object':

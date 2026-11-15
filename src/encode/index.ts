@@ -32,7 +32,7 @@ import {
   encodeUserDefined,
 } from './other.js';
 import { readBack } from './readback.js';
-import { checkShape, guarded, pendingShapeFaults } from './shape.js';
+import { checkShape, guarded, pendingShapeFaults, strayFields } from './shape.js';
 import { encodeItem, encodeMicE, encodeObject, micEAltitudeHasNextForm, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
 
 export { AprsEncodeError, DEFAULT_DESTINATION } from './common.js';
@@ -82,7 +82,30 @@ const INNER_HEADER_CODES: ReadonlySet<string> = new Set([
   'invalid-ax25-address-characters',
 ]);
 
+/**
+ * Whether a number anywhere in the data, at any depth (a third-party packet's inner data and every
+ * list included), is NaN or an infinity. Walked with a stack, once, so no field can be missed.
+ */
+function holdsNonFinite(root: unknown): boolean {
+  const seen = new Set<object>();
+  const stack: unknown[] = [root];
+  while (stack.length > 0) {
+    const v = stack.pop();
+    if (typeof v === 'number') {
+      if (!Number.isFinite(v)) return true;
+    } else if (typeof v === 'object' && v !== null && !(v instanceof Uint8Array) && !seen.has(v)) {
+      seen.add(v);
+      for (const x of Object.values(v)) stack.push(x);
+    }
+  }
+  return false;
+}
+
 function attemptOnce(data: AprsData, mode: CommentMode, options: WriteOptions, altitudeForm?: 'bytes' | 'text'): Attempt {
+  // A number that is not a number is refused wherever it is, whatever the field: never compared as absent.
+  if (holdsNonFinite(data)) flag('not-a-number', 'a value is NaN or an infinity');
+  // A field the type has no place for is refused, not dropped.
+  for (const k of strayFields(data as unknown as Record<string, unknown>)) flag('field-not-allowed', `a ${data.type} has no ${k}`);
   // A required field left out or of the wrong kind, held until the rest is checked.
   for (const e of pendingShapeFaults(data)) flag(e.code, e.message);
   const inner = (data as { weather?: unknown }).weather;

@@ -461,3 +461,76 @@ describe('base-91 telemetry is the last valid block (R27, aprs-vectors#32)', () 
     expect(back).toMatchObject({ telemetry: { sequence: 1, analog: [2] }, comment: 'x|!!!!|y' });
   });
 });
+
+describe('R28: second reviews', () => {
+  const pos = (more: object): AprsData => ({ type: 'position', ...at, ...more }) as AprsData;
+
+  it('takes an ambiguity of 0 as none: written with none and compared as absent, in data and in a builder', () => {
+    expect(text(encodeInformation(pos({ ambiguity: 0 })).information)).toBe('!5130.00N/00006.00W>');
+    expect(text(encodeInformation({ type: 'object', name: 'OBJ', timestamp: { kind: 'dhm-zulu', day: 9, hour: 23, minute: 45 }, ...at, ambiguity: 0 } as AprsData).information)).toBe(';OBJ      *092345z5130.00N/00006.00W>');
+    const mice = { type: 'mic-e', micEMessage: 'en-route', ...at };
+    expect(text(encodeInformation({ ...mice, ambiguity: 0 } as AprsData).information)).toBe(text(encodeInformation(mice as AprsData).information));
+    expect(Aprs.from('N0CALL').position(51.5, -0.1).symbol('/>').ambiguity(0).build().toTnc2()).toBe('N0CALL>APZ001:!5130.00N/00006.00W>');
+    expect(Aprs.from('N0CALL').micE(51.5, -0.1).symbol('/>').ambiguity(0).build().toTnc2()).toBe(Aprs.from('N0CALL').micE(51.5, -0.1).symbol('/>').build().toTnc2());
+    expect(readBack(pos({ ambiguity: 0 }), '!5130.00N/00006.00W>', undefined)).toEqual([]);
+    // A Mic-E destination SSID of 0 is none too.
+    expect(text(encodeInformation({ ...mice, destinationSsid: 0 } as AprsData).information)).toBe(text(encodeInformation(mice as AprsData).information));
+  });
+
+  it('says a voice offset as given when it is not a whole number', () => {
+    expect(message(() => encodeInformation(pos({ frequency: { mhz: 146.52, offsetKhz: 600.5 } })))).toContain('600.5');
+    expect(message(() => encodeInformation(pos({ frequency: { mhz: 146.52, offsetKhz: 600.5 } })))).not.toContain('60.05');
+  });
+
+  it('refuses a field the type has no place for, as field-not-allowed, at every depth', () => {
+    const date = { kind: 'dhm-zulu', day: 9, hour: 23, minute: 45 };
+    const strays: AprsData[] = [
+      { type: 'item', name: 'ITEM', ...at, timestamp: date } as unknown as AprsData,
+      { type: 'bulletin', addressee: 'BLN1', text: 'x', replyAck: '1' } as unknown as AprsData,
+      { type: 'ack', addressee: 'N0CALL', ackedId: '1', text: 'x' } as unknown as AprsData,
+      { type: 'status', text: 'x', comment: 'y' } as unknown as AprsData,
+      { type: 'test', data: 'x', comment: 'y' } as unknown as AprsData,
+    ];
+    for (const data of strays) {
+      expect(code(() => encodeInformation(data)), data.type).toBe('field-not-allowed');
+      expect(code(() => encodeInformation(nested(data, 2))), `${data.type} nested`).toBe('field-not-allowed');
+    }
+    // An absent value is no field, and the fields a type has are never strays.
+    expect(code(() => encodeInformation({ type: 'item', name: 'ITEM', ...at, timestamp: undefined, killed: false } as unknown as AprsData))).toBe('written');
+  });
+
+  it('strips a trailing run of CRs and LFs with one warning, carries it in a pass-through, and refuses one inside only', () => {
+    const held = decodeTnc2(encodeUtf8('N0CALL>APZ001:>x\r\n\r\n'));
+    expect(held.diagnostics.filter((d) => d.code === 'trailing-line-break')).toHaveLength(1);
+    expect(held.data).toMatchObject({ type: 'status', text: 'x' });
+    expect(text(packetToTnc2Bytes(held))).toBe('N0CALL>APZ001:>x\r\n\r\n');
+    expect(code(() => packetToTnc2({ ...held, information: encodeUtf8('>x\r\ny\r\n') }))).toBe('tnc2-cannot-carry');
+  });
+
+  it('writes test and user-defined data with a line break inside as a field alone, refuses a line, and refuses one at the end', () => {
+    for (const data of [{ type: 'test', data: 'a\nb' }, { type: 'user-defined', userId: 'A', packetType: 'x', data: 'a\rb' }] as AprsData[]) {
+      expect(code(() => encodeInformation(data)), data.type).toBe('written');
+      expect(code(() => encodeTnc2({ source: 'N0CALL', data })), data.type).toBe('tnc2-cannot-carry');
+      expect(code(() => encodeAx25({ source: 'N0CALL', data })), data.type).toBe('written');
+    }
+    expect(code(() => encodeInformation({ type: 'test', data: 'ab\n' }))).toBe('invalid-character');
+    expect(code(() => encodeInformation({ type: 'user-defined', userId: 'A', packetType: 'x', data: 'ab\r' }))).toBe('invalid-character');
+  });
+
+  it('refuses a number that is not a number as not-a-number in every field, whatever the field checks', () => {
+    // A Mic-E legacy telemetry byte is checked as a whole number first: only the walk over every number names it.
+    const mice = { type: 'mic-e', micEMessage: 'en-route', ...at, legacyTelemetry: [1, 2, Number.NaN, 4, 5] } as AprsData;
+    expect(code(() => encodeInformation(mice))).toBe('not-a-number');
+    expect(code(() => encodeInformation(nested(mice, 2)))).toBe('not-a-number');
+    expect(code(() => encodeInformation({ type: 'nmea', sentence: 'GPGLL,4916.45,N,12311.12,W,225444,A,*1D', speedKnots: Infinity } as AprsData))).toBe('not-a-number');
+  });
+
+  it('refuses an out-of-order path two levels down as invalid-third-party-header, and a corridor off a line as field-not-allowed', () => {
+    const bad = [{ address: 'W1', used: false }, { address: 'W2', used: true }];
+    const level = (data: unknown, path: unknown[]) => ({ type: 'third-party', packet: { source: 'A', destination: 'B', path, information: new Uint8Array(0), data, diagnostics: [] } }) as AprsData;
+    expect(code(() => encodeInformation(level(level(status, bad), [])))).toBe('invalid-third-party-header');
+    expect(code(() => encodeInformation(level(level(level(status, bad), []), [])))).toBe('invalid-third-party-header');
+    const area = { shape: 'open-circle', color: 'red', latOffset: 1, lonOffset: 2, corridorWidthMiles: 5 };
+    expect(code(() => encodeInformation(pos({ symbol: { table: '\\', code: 'l' }, area })))).toBe('field-not-allowed');
+  });
+});

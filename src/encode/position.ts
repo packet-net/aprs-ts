@@ -290,7 +290,12 @@ export function frequencyText(f: VoiceFrequency): string {
     if (wholeKhz && f.offsetKhz % 10 !== 0) {
       if (inRange) flag('value-has-no-form', 'the offset is in tens of kHz');
       else flag('value-out-of-range', 'the offset is out of range (0-999 tens of kHz)');
-    } else v = exact(Math.abs(f.offsetKhz) / 10, 0, 999, 'offset');
+    } else if (!Number.isFinite(f.offsetKhz)) flag('not-a-number', `the offset ${f.offsetKhz} is not a number`);
+    else if (!wholeKhz) flag('value-out-of-range', `the offset ${f.offsetKhz} kHz is not a whole number`);
+    else {
+      v = Math.abs(f.offsetKhz) / 10;
+      if (v > 999) flag('value-out-of-range', `the offset ${f.offsetKhz} kHz is out of range (0 to 9990)`);
+    }
     out += ` ${f.offsetKhz < 0 ? '-' : '+'}${pad(v, 3)}`;
   }
   if (f.range !== undefined) {

@@ -189,3 +189,51 @@ export function guarded<T>(step: () => T, code: RefusalCode = 'malformed'): T {
     throw new AprsEncodeError(`the data is not of a shape this encoder can use: ${e instanceof Error ? e.message : String(e)}`, code);
   }
 }
+
+const POSITIONED_KEYS = [
+  'latitude', 'longitude', 'ambiguity', 'symbol', 'compressed', 'compression', 'courseDegrees', 'speedKnots', 'altitudeFeet', 'phg', 'rangeMiles',
+  'dfs', 'area', 'dfBearing', 'storm', 'dao', 'telemetry', 'frequency', 'weather', 'signpost', 'comment',
+];
+
+/** The fields each type of data has (types.ts); `type` is always one. */
+const FIELDS: Readonly<Record<string, readonly string[]>> = {
+  position: [...POSITIONED_KEYS, 'timestamp', 'messaging'],
+  'mic-e': [...POSITIONED_KEYS, 'micEMessage', 'oldData', 'altitudeInComment', 'typeCode', 'deviceSuffix', 'locator', 'legacyTelemetry', 'destinationSsid'],
+  object: [...POSITIONED_KEYS, 'name', 'killed', 'timestamp'],
+  item: [...POSITIONED_KEYS, 'name', 'killed'],
+  message: ['addressee', 'text', 'messageId', 'replyAck'],
+  ack: ['addressee', 'ackedId', 'replyAck', 'messageId'],
+  reject: ['addressee', 'rejectedId', 'replyAck', 'messageId'],
+  bulletin: ['addressee', 'text', 'messageId'],
+  'nws-bulletin': ['addressee', 'text', 'messageId'],
+  'telemetry-names': ['addressee', 'names', 'messageId'],
+  'telemetry-units': ['addressee', 'units', 'messageId'],
+  'telemetry-coefficients': ['addressee', 'coefficients', 'coefficientsText', 'messageId'],
+  'telemetry-bits': ['addressee', 'bits', 'project', 'messageId'],
+  'directed-query': ['addressee', 'queryType', 'target'],
+  status: ['timestamp', 'locator', 'symbol', 'beam', 'text'],
+  telemetry: ['sequence', 'analog', 'analogText', 'bits', 'comment'],
+  weather: ['timestamp', 'weather', 'comment'],
+  'raw-weather': ['format', 'data'],
+  nmea: ['sentence', 'hasChecksum', 'latitude', 'longitude', 'fix', 'courseDegrees', 'speedKnots', 'altitudeM', 'time', 'waypoint', 'comment'],
+  'maidenhead-beacon': ['locator', 'comment'],
+  query: ['queryType', 'footprint'],
+  capabilities: ['capabilities'],
+  'third-party': ['packet'],
+  'user-defined': ['userId', 'packetType', 'data'],
+  test: ['data'],
+  'agrelo-df': ['bearingDegrees', 'quality'],
+  unrecognized: ['reason'],
+};
+
+/**
+ * The fields a data object holds that its type has no place for (an item's timestamp, a bulletin's
+ * reply-ack, an ack's text): the neutral form would leave them out, so a typed object that carries
+ * one is refused `field-not-allowed`, as the rule says of a field the report has no place for.
+ * An absent value (`undefined`, `null`, `false`) is no field.
+ */
+export function strayFields(data: Record<string, unknown>): string[] {
+  const own = FIELDS[data.type as string];
+  if (own === undefined) return [];
+  return Object.keys(data).filter((k) => k !== 'type' && !own.includes(k) && data[k] !== undefined && data[k] !== null && data[k] !== false);
+}

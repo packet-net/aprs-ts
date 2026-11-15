@@ -275,7 +275,10 @@ export function encodeUserDefined(d: UserDefined): string {
 }
 
 export function encodeTest(d: TestData): string {
-  return `,${freeText(d.data ?? '', 'test data', false)}`;
+  // Data: a CR or LF inside is written (a line refuses it, `tnc2-cannot-carry`); only data ending in one has no form.
+  const data = d.data ?? '';
+  if (/[\r\n]$/.test(data)) flag('invalid-character', 'test data cannot end in a line break');
+  return `,${encodeUtf8Binary(data)}`;
 }
 
 export function encodeAgrelo(d: AgreloDf): string {
