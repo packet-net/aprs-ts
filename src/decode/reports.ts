@@ -47,6 +47,10 @@ export function decodePositionReport(ctx: DecodeContext, s: string): PositionRep
     if (timestamp) {
       if (!timestampValid(timestamp)) ctx.tolerate('invalid-timestamp');
       start = 8;
+    } else if (s.length >= 9 && 'z/h'.includes(s[7]!) && /[0-9]/.test(s[8]!) && positionDecodesAt(ctx, s, 8)) {
+      // Garbled timestamp ending in a time indicator before an uncompressed position: read after it.
+      ctx.tolerate('malformed-timestamp');
+      start = 8;
     } else if (positionDecodesAt(ctx, s, 1)) {
       ctx.tolerate('malformed-timestamp');
       start = 1;

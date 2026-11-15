@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+A `/` or `@` report whose timestamp is not valid but whose seventh byte is `z`, `/` or `h` and is followed by an uncompressed position (`@R30549z2831.07N/08142.92W_...`) is now read after the seven bytes, with `malformed-timestamp`, instead of reading the garbled bytes as a compressed position. A compressed position after the seven bytes does not take part, and every other report decodes as before. Vectors pinned at b118424e59fb62194ded6552c1796ad9280f188d (aprs-vectors, branch `round-5`).
+
 ## 1.2.0 (2026-11-14)
 
 A decoded packet now owns its bytes: `decodeTnc2`, `decodeAx25` and `decodeKiss` copy the information field instead of sharing memory with the caller's buffer, so a read loop that reuses its buffer no longer corrupts packets already decoded. `decodeKiss` and `unwrapKiss` throw `AprsHeaderError` (`not-aprs-frame`), not a `RangeError`, for an empty frame or a non-data KISS command. `toKiss(port)` and `wrapKiss` throw a `RangeError` unless the port is an integer 0-15, instead of masking it. The number patterns for telemetry values, equation coefficients and query footprints (decoder and encoder) take linear time on a long run of digits, with the same accepted text. README: the sibling libraries are listed and linked correctly, and the package is stated to be ESM only. The publish workflow refuses a tag or manual version that differs from package.json.
