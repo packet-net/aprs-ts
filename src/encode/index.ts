@@ -31,6 +31,8 @@ import {
   encodeThirdParty,
   encodeUserDefined,
 } from './other.js';
+import { decodeInformation } from '../decode/index.js';
+import { toNeutralData } from '../neutral.js';
 import { readBack } from './readback.js';
 import { checkShape, guarded, pendingShapeFaults, strayFields } from './shape.js';
 import { encodeItem, encodeMicE, encodeObject, micEAltitudeHasNextForm, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
@@ -168,7 +170,21 @@ function attemptOnce(data: AprsData, mode: CommentMode, options: WriteOptions, a
       // A defect the lenient decoder tolerated in the inner header is part of the data it read.
       if (data.packet.diagnostics.some((x) => x.severity !== 'info' && INNER_HEADER_CODES.has(x.code)))
         flag('invalid-third-party-header', 'the inner header has a defect that was tolerated when it was read');
-      const info = asReceived ? original : encodeInformation(inner).information;
+      // The inner packet is read under its own inner destination: an information field held with
+      // a header it does not read as its data under, or Mic-E data whose inner destination is not
+      // the one it computes, is not data this call can write (the computed destination is never
+      // put in the place of the one given).
+      let info: Uint8Array;
+      if (asReceived) {
+        // (A deeper third-party packet is read to the depth the decoder allows from here, and is judged at its own level.)
+        if (inner.type !== 'third-party') checkReadsAsHeld(original, data.packet.destination, inner);
+        info = original;
+      } else {
+        const encoded = encodeInformation(inner);
+        if (encoded.destination !== undefined && encoded.destination !== data.packet.destination)
+          flag('not-encodable', `inner Mic-E data computes the destination ${encoded.destination}, not ${JSON.stringify(data.packet.destination)}`);
+        info = encoded.information;
+      }
       return { binary: encodeThirdParty(data, bytesToBinary(info)) };
     }
     case 'user-defined':
@@ -180,6 +196,22 @@ function attemptOnce(data: AprsData, mode: CommentMode, options: WriteOptions, a
     case 'unrecognized':
       return refuse('not-encodable', 'unrecognized data has nothing to encode');
   }
+}
+
+/**
+ * Whether an information field, read under the destination it is written with, reads as the data
+ * it is held with. Only a Mic-E destination changes a reading, so this is what refuses a held
+ * packet re-addressed to or from one: bytes shaped like Mic-E under a Mic-E destination read as a
+ * position, and a Mic-E report under a plain destination loses half of its position.
+ */
+export function readsAsHeld(information: Uint8Array, destination: string, data: AprsData): boolean {
+  const read = decodeInformation(information, destination, ParseOptions.lenient).data;
+  return JSON.stringify(toNeutralData(read)) === JSON.stringify(toNeutralData(data));
+}
+
+/** Refuses (`not-encodable`) a held information field that reads as other data under the destination it is written with. */
+export function checkReadsAsHeld(information: Uint8Array, destination: string, data: AprsData): void {
+  if (!readsAsHeld(information, destination, data)) refuse('not-encodable', `the information field would read as other data under the destination ${JSON.stringify(destination)}`);
 }
 
 /**

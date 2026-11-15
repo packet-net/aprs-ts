@@ -183,6 +183,18 @@ function passThroughCheck(c: Case, lenient: Result, inner = false): string[] {
     if (lenient.packet.data.type !== 'third-party') return ['the case has pass_through_inner but the packet is not third-party'];
     held = lenient.packet.data.packet;
   }
+  // `header`: the held packet's information field is written under that header instead of its own,
+  // as a program re-addressing a held packet does (the packet with its header changed).
+  const given = (inner ? c.pass_through_inner : c.pass_through) as { header?: { source?: string; destination?: string; path?: string[] } };
+  if (given.header !== undefined) {
+    const h = given.header;
+    held = {
+      ...held,
+      source: h.source ?? held.source,
+      destination: h.destination ?? held.destination,
+      path: (h.path ?? held.path.map((e) => (e.used ? `${e.address}*` : e.address))).map((e) => (e.endsWith('*') ? { address: e.slice(0, -1), used: true } : { address: e, used: false })),
+    };
+  }
   const problems: string[] = [];
   const run = (what: string, write: () => string, text: string | undefined, refusal: string | undefined): void => {
     if (text === undefined && refusal === undefined) return;

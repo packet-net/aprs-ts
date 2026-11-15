@@ -1,7 +1,7 @@
 // What a program does with a packet it received: ask about its diagnostics, write it out again as
 // received, and read the values behind a PHG's codes.
 
-import { ax25Of, tnc2BytesOf, tnc2TextOf } from './encode/index.js';
+import { ax25Of, checkReadsAsHeld, tnc2BytesOf, tnc2TextOf } from './encode/index.js';
 import { guarded } from './encode/shape.js';
 import type { AprsPacket, Phg } from './types.js';
 
@@ -22,13 +22,17 @@ export function hasWarnings(packet: AprsPacket): boolean {
  * field over 256 bytes is written as it came), but the header written is read back like any
  * other.
  *
- * @throws AprsEncodeError: `invalid-address` or `invalid-path` for a header no form can carry (a
+ * @throws AprsEncodeError: `not-encodable` when the information field reads as other data under the destination written (a held
+ * packet re-addressed to or from a Mic-E destination), `invalid-address` or `invalid-path` for a header no form can carry (a
  * packet read from inside a third-party packet is held to the outer address rule, so an inner
  * source such as `a b` is refused), and `tnc2-cannot-carry` when the header reads back as another
  * one or the information field holds a CR or LF before its end (a line ends there).
  */
 export function packetToTnc2Bytes(packet: AprsPacket): Uint8Array {
-  return guarded(() => tnc2BytesOf(packet.source, packet.destination, packet.path, packet.information));
+  return guarded(() => {
+    checkReadsAsHeld(packet.information, packet.destination, packet.data);
+    return tnc2BytesOf(packet.source, packet.destination, packet.path, packet.information);
+  });
 }
 
 /**
@@ -51,7 +55,10 @@ export function packetToTnc2(packet: AprsPacket): string {
  * or the path has more than 8 entries. A CR or LF in the information field is carried.
  */
 export function packetToAx25(packet: AprsPacket): Uint8Array {
-  return guarded(() => ax25Of(packet.source, packet.destination, packet.path, packet.information));
+  return guarded(() => {
+    checkReadsAsHeld(packet.information, packet.destination, packet.data);
+    return ax25Of(packet.source, packet.destination, packet.path, packet.information);
+  });
 }
 
 /** What a PHG's codes stand for. */

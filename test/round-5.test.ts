@@ -97,8 +97,7 @@ describe('a call never writes a frame or a line the form forbids', () => {
     expect(code(() => packetToAx25(held))).toBe('ax25-cannot-carry');
   });
   it('refuses a CR or LF inside the information field written as a line, in every call that writes a line', () => {
-    const held = decodeTnc2('N0CALL>APZ001:>x');
-    const inside: AprsPacket = { ...held, information: encodeUtf8('>a\rb') };
+    const inside: AprsPacket = decodeTnc2(encodeUtf8('N0CALL>APZ001:>a\rb'));
     expect(code(() => packetToTnc2(inside))).toBe('tnc2-cannot-carry');
     expect(code(() => packetToTnc2Bytes(inside))).toBe('tnc2-cannot-carry');
     // A frame carries it.
@@ -116,8 +115,7 @@ describe('a call never writes a frame or a line the form forbids', () => {
     expect(code(() => built.toKiss())).toBe('written');
   });
   it('carries a line break at the very end of the field, which a decoder takes off', () => {
-    const held = decodeTnc2('N0CALL>APZ001:>x');
-    expect(packetToTnc2({ ...held, information: encodeUtf8('>x\r\n') })).toBe('N0CALL>APZ001:>x\r\n');
+    expect(packetToTnc2(decodeTnc2(encodeUtf8('N0CALL>APZ001:>x\r\n')))).toBe('N0CALL>APZ001:>x\r\n');
   });
 });
 
@@ -504,7 +502,7 @@ describe('R28: second reviews', () => {
     expect(held.diagnostics.filter((d) => d.code === 'trailing-line-break')).toHaveLength(1);
     expect(held.data).toMatchObject({ type: 'status', text: 'x' });
     expect(text(packetToTnc2Bytes(held))).toBe('N0CALL>APZ001:>x\r\n\r\n');
-    expect(code(() => packetToTnc2({ ...held, information: encodeUtf8('>x\r\ny\r\n') }))).toBe('tnc2-cannot-carry');
+    expect(code(() => packetToTnc2(decodeTnc2(encodeUtf8('N0CALL>APZ001:>x\r\ny\r\n'))))).toBe('tnc2-cannot-carry');
   });
 
   it('writes test and user-defined data with a line break inside as a field alone, refuses a line, and refuses one at the end', () => {
@@ -532,5 +530,30 @@ describe('R28: second reviews', () => {
     expect(code(() => encodeInformation(level(level(level(status, bad), []), [])))).toBe('invalid-third-party-header');
     const area = { shape: 'open-circle', color: 'red', latOffset: 1, lonOffset: 2, corridorWidthMiles: 5 };
     expect(code(() => encodeInformation(pos({ symbol: { table: '\\', code: 'l' }, area })))).toBe('field-not-allowed');
+  });
+});
+
+describe('an information field is read back under the header written with it', () => {
+  const raw = encodeUtf8('`(_fn"Oj/');
+  const created = (destination: string): AprsPacket => ({ source: 'N0CALL', destination, path: [], information: raw, data: { type: 'unrecognized', reason: 'malformed' }, diagnostics: decodeTnc2(encodeUtf8('N0CALL>APZ001:`(_fn"Oj/')).diagnostics }) as AprsPacket;
+  const miceData = { type: 'mic-e', micEMessage: 'returning', latitude: 33.42733333333334, longitude: -12.129, symbol: { table: '/', code: 'j' }, courseDegrees: 251, speedKnots: 20 } as AprsData;
+  const thirdParty = (packet: unknown): AprsData => ({ type: 'third-party', packet }) as AprsData;
+
+  it('refuses raw bytes shaped like Mic-E created under a Mic-E destination, at the top and as an inner packet, and writes them under a plain one', () => {
+    expect(code(() => packetToTnc2(created('S32U6T')))).toBe('not-encodable');
+    expect(code(() => packetToAx25(created('S32U6T')))).toBe('not-encodable');
+    expect(code(() => encodeInformation(thirdParty(created('S32U6T'))))).toBe('not-encodable');
+    expect(packetToTnc2(created('APZ001'))).toBe('N0CALL>APZ001:`(_fn"Oj/');
+    expect(text(encodeInformation(thirdParty(created('APZ001'))).information)).toBe('}N0CALL>APZ001:`(_fn"Oj/');
+  });
+  it('refuses a held Mic-E report re-addressed to a plain destination, and writes it under its own', () => {
+    const held = decodeTnc2('N0CALL>S32U6T:`(_fn"Oj/');
+    expect(code(() => packetToTnc2({ ...held, destination: 'APZ001' }))).toBe('not-encodable');
+    expect(packetToTnc2(held)).toBe('N0CALL>S32U6T:`(_fn"Oj/');
+  });
+  it('writes inner Mic-E data under the destination it computes, and refuses another, never substituting', () => {
+    const inner = (destination: string) => ({ source: 'N0CALL', destination, path: [], information: new Uint8Array(0), data: miceData, diagnostics: [] });
+    expect(text(encodeInformation(thirdParty(inner('S32U6T'))).information)).toBe('}N0CALL>S32U6T:`(_fn"Oj/');
+    expect(code(() => encodeInformation(thirdParty(inner('APRS'))))).toBe('not-encodable');
   });
 });
