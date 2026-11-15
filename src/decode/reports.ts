@@ -382,6 +382,15 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     text = text.slice(4);
     sentLocator = MIC_E_LOCATOR.exec(text);
     extensionLooked = false;
+    if (!sentLocator) {
+      // A PHG, RNG or DFS straight after the leading altitude is lifted before telemetry is looked
+      // for, so a bar in it (a PHG height code may be any of `0` to `~`) never opens telemetry.
+      extension = extensionAt(text, 0);
+      if (extension) {
+        text = maskRange(text, 0, extension.length);
+        extensionLooked = true;
+      }
+    }
     if (sentLocator) {
       // After a leading altitude and a locator, a PHG or RNG is read where it is as sent, as it is
       // after a locator at the start; one found only once something is lifted is late.
