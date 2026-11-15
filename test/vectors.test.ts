@@ -50,7 +50,6 @@ const known: KnownDifference[] = JSON.parse(readFileSync(new URL('./known-differ
 const knownReason = (id: string, check: string): string | undefined => known.find((k) => k.id === id && k.check === check)?.reason;
 const tolerable = loadTolerable();
 let toleranceRan = 0;
-const toleranceSkipped: string[] = [];
 
 function check(id: string, name: string, body: () => void): void {
   const reason = knownReason(id, name);
@@ -201,16 +200,24 @@ for (const { file, cases } of loadCases()) {
       check(c.id, 'strict', () => fail(checkStrict(decode(input, ParseOptions.strict), c)));
       const code = singleTolerance(c, tolerable);
       if (code !== undefined) {
-        // Skipped when strict is rejected by a code other than the one tolerance (README, "Checking a case").
+        toleranceRan++;
+        // strict a reading, or rejected by this code: the result is the strict one. Rejected by a
+        // different code: turning this tolerance off gives a reading with that code as a warning
+        // (README, "Checking a case").
         const strictCode = c.strict !== undefined && c.strict !== 'same' ? c.strict.rejected_by : undefined;
-        if (strictCode !== undefined && strictCode !== code) {
-          toleranceSkipped.push(c.id);
-        } else {
-          toleranceRan++;
-        }
-      }
-      if (code !== undefined && !toleranceSkipped.includes(c.id)) {
-        check(c.id, 'tolerance', () => fail(checkStrict(decode(input, ParseOptions.lenient.without(code)), c)));
+        check(c.id, 'tolerance', () => {
+          const r = decode(input, ParseOptions.lenient.without(code));
+          if (strictCode === undefined || strictCode === code) {
+            fail(checkStrict(r, c));
+          } else if ('header_error' in r) {
+            fail([`header rejected, want a reading with warning:${strictCode}`]);
+          } else {
+            const problems: string[] = [];
+            if (r.data.type === 'unrecognized') problems.push('want a reading, got unrecognized');
+            if (!r.diagnostics.includes(`warning:${strictCode}`)) problems.push(`want warning:${strictCode} among ${JSON.stringify(r.diagnostics)}`);
+            fail(problems);
+          }
+        });
       }
       if (c.reencode !== undefined) {
         check(c.id, 'reencode', () => fail(reencodeCheck(c, decode(input, ParseOptions.lenient))));
@@ -219,12 +226,11 @@ for (const { file, cases } of loadCases()) {
   });
 }
 
-// How many cases the tolerance check ran on and which it left out: only one case leaves it (the
-// vectors' RULED.md), so a mistake that skips too many shows here.
+// The tolerance check runs on every case whose lenient diagnostics name exactly one tolerable
+// code, none skipped, so the count shows if a mistake drops cases.
 describe('tolerance check coverage', () => {
-  it('skips only the Mic-E telemetry case', () => {
-    console.log(`tolerance check ran on ${toleranceRan} cases, skipped ${toleranceSkipped.length}`);
-    expect(toleranceSkipped).toEqual(['mic-e/telemetry-left-once-an-altitude-is-lifted-then-a-spaced-comment']);
-    expect(toleranceRan).toBeGreaterThan(0);
+  it('runs on every case with exactly one tolerable code', () => {
+    console.log(`tolerance check ran on ${toleranceRan} cases`);
+    expect(toleranceRan).toBeGreaterThanOrEqual(726);
   });
 });

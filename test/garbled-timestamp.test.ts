@@ -60,14 +60,17 @@ describe('a garbled timestamp before an uncompressed position', () => {
 
   it('a seventh byte that is not a time indicator keeps the old reading', () => {
     const line = `${hdr}@R30549x2831.07N/08142.92W-`;
-    expect(lat(line)).not.toBeCloseTo(28.5178333, 3);
+    // read as before: the garbled bytes taken for a compressed position straight after the DTI
+    expect(lat(line)).toBeCloseTo(54.06038968, 6);
+    expect(codes(line)).toEqual(['warning:malformed-timestamp']);
   });
 
   it('a compressed position after the seven bytes does not win', () => {
     const line = `${hdr}@R30549z/5L!!<*e7>{?!`;
     const a = decodeTnc2(line);
-    const b = decodeTnc2(`${hdr}@R30549z/5L!!<*e7>{?!`);
-    expect(a.diagnostics.map((d) => d.code)).toEqual(b.diagnostics.map((d) => d.code));
+    // the compressed reading straight after the DTI: latitude from /5L!, not from an uncompressed position
+    expect(a.diagnostics.map((d) => d.code)).toEqual(['malformed-timestamp']);
+    expect((a.data as { compressed?: boolean }).compressed).toBe(true);
   });
 
   it('a field shorter than nine bytes cannot take the branch', () => {
