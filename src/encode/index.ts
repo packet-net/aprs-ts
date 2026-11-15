@@ -9,7 +9,7 @@ import { binaryToBytes, bytesToBinary, decodeUtf8 } from '../bytes.js';
 import { formatDiagnostic, ParseOptions, type Diagnostic } from '../diagnostics.js';
 import { AprsHeaderError, formatTnc2Header, isAprsIsAddress, parseAx25Frame, readHeaderText, type ParsedHeader } from '../header.js';
 import type { AprsData, CompressionType, PathEntry } from '../types.js';
-import { AprsEncodeError, collect, flag, givenTwiceReason, DEFAULT_DESTINATION, firstRefusal, refuse } from './common.js';
+import { AprsEncodeError, collect, flag, givenTwiceReason, micEAltitudeGiven, DEFAULT_DESTINATION, firstRefusal, refuse } from './common.js';
 import {
   encodeAck,
   encodeAgrelo,
@@ -33,7 +33,7 @@ import {
 } from './other.js';
 import { readBack } from './readback.js';
 import { checkShape, guarded, pendingShapeFaults } from './shape.js';
-import { encodeItem, encodeMicE, encodeObject, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
+import { encodeItem, encodeMicE, encodeObject, micEAltitudeHasNextForm, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
 
 export { AprsEncodeError, DEFAULT_DESTINATION } from './common.js';
 
@@ -58,9 +58,9 @@ function withCompression(b: { text: string; compression?: CompressionType }): At
 /** The most bytes an information field holds (APRS12c ch. 3). */
 const MAX_INFORMATION_BYTES = 256;
 
-function attempt(data: AprsData, mode: CommentMode): Attempt {
+function attempt(data: AprsData, mode: CommentMode, altitudeForm?: 'bytes' | 'text'): Attempt {
   return collect(() => {
-    return attemptOnce(data, mode);
+    return attemptOnce(data, mode, altitudeForm);
   });
 }
 
@@ -74,7 +74,7 @@ const INNER_HEADER_CODES: ReadonlySet<string> = new Set([
   'invalid-ax25-address-characters',
 ]);
 
-function attemptOnce(data: AprsData, mode: CommentMode): Attempt {
+function attemptOnce(data: AprsData, mode: CommentMode, altitudeForm?: 'bytes' | 'text'): Attempt {
   // A required field left out or of the wrong kind, held until the rest is checked.
   for (const e of pendingShapeFaults(data)) flag(e.code, e.message);
   const inner = (data as { weather?: unknown }).weather;
@@ -90,7 +90,7 @@ function attemptOnce(data: AprsData, mode: CommentMode): Attempt {
     case 'item':
       return withCompression(encodeItem(data, mode));
     case 'mic-e': {
-      const m = encodeMicE(data, mode);
+      const m = encodeMicE(data, mode, altitudeForm);
       return { binary: m.text, destination: m.destination };
     }
     case 'weather':
@@ -181,21 +181,33 @@ export function passedReadBack(encoded: EncodedInformation): EncodedInformation 
 function finish(data: AprsData, first: Attempt): EncodedInformation {
   let problems = readBack(data, first.binary, first.destination);
   let chosen = first;
-  if (problems.length > 0 && typeof (data as { comment?: unknown }).comment === 'string') {
-    // The comment would read as something else: try it straight after a frequency, then after a
-    // /, then after a space.
+  if (problems.length > 0) {
+    // The next forms the Encoding rule names: the comment straight on to a frequency, then after
+    // a /, then after a space; and for a Mic-E altitude written in the bytes, a /A= that holds it
+    // exactly, each with the same three ways of joining the comment.
     // Free text after a frequency follows a space. It goes straight on to the frequency only
     // when the space would make it read as more frequency fields; when the frequency reads back
     // whole and the text does not (a Mic-E ' X' at the end is the device suffix), it takes a /.
-    const modes = data.type === 'mic-e' && readsBackWithItsFrequency(data, first) ? (['delimited', 'joined', 'spaced'] as const) : (['joined', 'delimited', 'spaced'] as const);
-    for (const mode of modes) {
+    const hasComment = typeof (data as { comment?: unknown }).comment === 'string';
+    const commentModes = data.type === 'mic-e' && readsBackWithItsFrequency(data, first) ? (['delimited', 'joined', 'spaced'] as const) : (['joined', 'delimited', 'spaced'] as const);
+    const tries: { form: 'bytes' | 'text' | undefined; mode: CommentMode }[] = [];
+    if (hasComment) for (const mode of commentModes) tries.push({ form: undefined, mode });
+    if (data.type === 'mic-e' && micEAltitudeHasNextForm(data)) {
+      tries.push({ form: 'text', mode: 'plain' });
+      if (hasComment) for (const mode of commentModes) tries.push({ form: 'text', mode });
+    }
+    // A builder rounded its altitude to the metre for the bytes; a /A= holds the value it was given.
+    const given = micEAltitudeGiven(data);
+    const asText = given === undefined ? data : ({ ...data, altitudeFeet: given } as AprsData);
+    for (const t of tries) {
+      const d = t.form === 'text' ? asText : data;
       let next: Attempt | undefined;
       try {
-        next = attempt(data, mode);
+        next = attempt(d, t.mode, t.form);
       } catch (e) {
         if (!(e instanceof AprsEncodeError)) throw e;
       }
-      if (next && next.binary !== first.binary && readBack(data, next.binary, next.destination).length === 0) {
+      if (next && next.binary !== first.binary && readBack(d, next.binary, next.destination).length === 0) {
         chosen = next;
         problems = [];
         break;
@@ -322,7 +334,9 @@ export function encodeTnc2(p: PacketToEncode): string {
   return tnc2TextOf(encodeTnc2Bytes(p));
 }
 
-function ax25Address(text: string, last: boolean, flag: boolean): number[] {
+function ax25Address(text: string, last: boolean, flag: boolean, mayBeEmpty = false): number[] {
+  // A held packet's empty destination is written as six spaces, which reads back empty again.
+  if (text === '' && mayBeEmpty) return [...Array.from({ length: 6 }, () => 0x20 << 1), 0x60 | (flag ? 0x80 : 0) | (last ? 1 : 0)];
   const m = /^([A-Z0-9]{1,6})(?:-([0-9]{1,2}))?$/.exec(text);
   if (!m) refuse('ax25-cannot-carry', `${JSON.stringify(text)} is not an AX.25 address`);
   if (m[2] !== undefined && m[2].startsWith('0')) refuse('ax25-cannot-carry', `${JSON.stringify(text)} has a leading zero or a zero in its SSID, which a frame would give back without it`);
@@ -343,7 +357,7 @@ export function ax25Of(source: string, destination: string, path: readonly (stri
   const entries = pathEntries(path);
   if (entries.length > 8) refuse('ax25-cannot-carry', 'AX.25 allows at most 8 digipeaters');
   const bytes: number[] = [];
-  bytes.push(...ax25Address(destination, false, true));
+  bytes.push(...ax25Address(destination, false, true, true));
   bytes.push(...ax25Address(source, entries.length === 0, false));
   entries.forEach((e, i) => bytes.push(...ax25Address(e.address, i === entries.length - 1, e.used)));
   bytes.push(0x03, 0xf0);

@@ -32,7 +32,7 @@ export {
   sameSymbol,
   type SymbolName,
 } from './symbols.js';
-export { Aprs, DEFAULT_DESTINATION, timestampOf, type BuiltPacket, type WeatherInput } from './builder.js';
+export { Aprs, DEFAULT_DESTINATION, timestampOf, type BuiltPacket, type HeaderForm, type WeatherInput } from './builder.js';
 // The builder classes are for naming types only: `Aprs.from()` is the way in.
 export type {
   PacketBuilder,

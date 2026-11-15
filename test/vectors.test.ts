@@ -19,6 +19,8 @@ import {
   AprsEncodeError,
   decodeTnc2,
   encodeInformation,
+  packetToAx25,
+  packetToTnc2,
   formatDiagnostic,
   ParseOptions,
   type AprsPacket,
@@ -171,6 +173,28 @@ function buildCheck(c: Case): string[] {
   return hex(want) === hex(r.bytes) ? [] : [`built ${JSON.stringify(latin1(r.bytes))}, want ${JSON.stringify(latin1(want))}`];
 }
 
+/** A decode case's `pass_through`: the lenient packet written back as held, with this library's pass-through writers. */
+function passThroughCheck(c: Case, lenient: Result): string[] {
+  if ('header_error' in lenient) return ['the lenient decoder rejected the header'];
+  const want = c.pass_through as { tnc2?: string; tnc2_refusal?: string; ax25_hex?: string; ax25_refusal?: string };
+  const problems: string[] = [];
+  const run = (what: string, write: () => string, text: string | undefined, refusal: string | undefined): void => {
+    if (text === undefined && refusal === undefined) return;
+    try {
+      const got = write();
+      if (refusal !== undefined) problems.push(`${what}: expected a refusal (${refusal}), wrote ${JSON.stringify(got)}`);
+      else if (got !== text) problems.push(`${what}: wrote ${JSON.stringify(got)}, want ${JSON.stringify(text)}`);
+    } catch (e) {
+      if (!(e instanceof AprsEncodeError)) throw e;
+      if (refusal === undefined) problems.push(`${what}: refused with ${e.code} (${e.message})`);
+      else if (refusal !== e.code) problems.push(`${what}: refused with ${e.code} (${e.message}), want ${refusal}`);
+    }
+  };
+  run('tnc2', () => packetToTnc2(lenient.packet), want.tnc2, want.tnc2_refusal);
+  run('ax25', () => hex(packetToAx25(lenient.packet)).toUpperCase(), want.ax25_hex?.toUpperCase(), want.ax25_refusal);
+  return problems;
+}
+
 // A case without `device` says nothing about device identification (vectors README, "Rules the
 // cases rely on"), so only a recorded one is checked.
 function deviceCheck(c: Case, lenient: Result): string[] {
@@ -219,6 +243,9 @@ for (const { file, cases } of loadCases()) {
             fail(problems);
           }
         });
+      }
+      if (c.pass_through !== undefined) {
+        check(c.id, 'pass-through', () => fail(passThroughCheck(c, decode(input, ParseOptions.lenient))));
       }
       if (c.reencode !== undefined) {
         check(c.id, 'reencode', () => fail(reencodeCheck(c, decode(input, ParseOptions.lenient))));

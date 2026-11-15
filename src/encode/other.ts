@@ -2,6 +2,7 @@
 // telemetry, queries, capabilities, and the rest.
 
 import { encodeUtf8Binary } from '../bytes.js';
+import { hasEmptyMessageId } from './common.js';
 import { DIRECTED_QUERY_TYPES } from '../decode/message.js';
 import { splitNmea } from '../decode/other.js';
 import { formatPath, isAprsIsAddress } from '../header.js';
@@ -63,6 +64,7 @@ function messageText(text: string, what = 'message text'): string {
 }
 
 export function encodeMessage(d: Message): string {
+  if (hasEmptyMessageId(d)) flag('invalid-message-id', 'a message ID is 1-5 letters or digits, not empty');
   // An addressee that makes the line a bulletin is not the form a message needs.
   if (/^(?:BLN[0-9A-Z]|NWS[-_])/.test(d.addressee)) flag('invalid-addressee', 'a message addressee cannot start BLN or NWS-, which make a bulletin');
   return `:${addressee(d.addressee)}:${messageText(d.text)}${messageId(d.messageId, d.replyAck)}`;

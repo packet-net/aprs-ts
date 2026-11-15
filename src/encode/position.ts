@@ -19,7 +19,7 @@ import type {
   WeatherReport,
 } from '../types.js';
 import { identifyMicE } from '../deviceid.js';
-import { base91, checkSymbol, freeText, isValidTimestamp, micEAltitudeBytesOnly, nearest, pad, flag, numberFault, refuse, timestamp7, whole } from './common.js';
+import { base91, checkSymbol, freeText, isValidTimestamp, micEAltitudeBytesOnly, micEAltitudeGiven, nearest, pad, flag, numberFault, refuse, timestamp7, whole } from './common.js';
 
 const EPS = 1e-9;
 const CUT_TOLERANCE = 1e-6;
@@ -388,6 +388,7 @@ function weatherFields(w: Weather, mandatory: boolean): string {
     // One thing, a letter then a 2-4 character unit: either alone is a field the report needs.
     if (w.software === undefined) flag('missing-field', 'a weather unit goes with a software type');
     else if (w.unit === undefined) flag('missing-field', 'a weather software type goes with a unit');
+    if (/[\x00-\x1f\x7f]/.test((w.software ?? '') + (w.unit ?? ''))) flag('invalid-character', 'a weather software type or unit contains a control character');
     if (w.software !== undefined && !/^[A-Za-z]$/.test(w.software)) flag('text-reads-as-field', 'the weather software type is one letter');
     if (w.unit !== undefined && (!/^[A-Za-z0-9_-]{2,4}$/.test(w.unit) || /^[0-9]+$/.test(w.unit)))
       flag('text-reads-as-field', 'the weather unit is 2-4 letters, digits, - or _');
@@ -788,6 +789,26 @@ function micEAltitudeInText(feet: number): boolean {
   return !exactInBytes;
 }
 
+/** Whether a `/A=` holds an altitude exactly: a whole number of feet within six digits. */
+function micEAltitudeInAltitude(feet: number): boolean {
+  return Number.isFinite(feet) && nearlyWhole(feet) && Math.round(feet) >= -99999 && Math.round(feet) <= 999999;
+}
+
+/**
+ * The form of a Mic-E altitude written first: the `/A=` it came from, or one only a `/A=` holds
+ * exactly; otherwise the Mic-E bytes, and always the bytes for a builder's.
+ */
+function micEAltitudeForm(d: MicEReport): 'bytes' | 'text' {
+  if (d.altitudeInComment) return 'text';
+  return !micEAltitudeBytesOnly(d) && d.altitudeFeet !== undefined && Number.isFinite(d.altitudeFeet) && micEAltitudeInText(d.altitudeFeet) ? 'text' : 'bytes';
+}
+
+/** Whether a `/A=` is the next form for this Mic-E data: its altitude is written in the bytes first and a `/A=` holds it exactly. */
+export function micEAltitudeHasNextForm(d: MicEReport): boolean {
+  const feet = micEAltitudeGiven(d) ?? d.altitudeFeet;
+  return feet !== undefined && !d.altitudeInComment && micEAltitudeForm(d) === 'bytes' && micEAltitudeInAltitude(feet);
+}
+
 /** The Mic-E altitude bytes for an altitude in feet, rounded once to the metre; one outside their range is refused. */
 function micEAltitudeBytes(feet: number): string {
   const metres = nearest(feet * METRES_PER_FOOT);
@@ -799,7 +820,7 @@ function micEAltitudeBytes(feet: number): string {
 }
 
 /** A Mic-E report: the information field and the destination address. */
-export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; destination: string } {
+export function encodeMicE(d: MicEReport, mode: CommentMode, altitudeForm?: 'bytes' | 'text'): { text: string; destination: string } {
   if (d.compressed || d.compression) flag('field-not-allowed', 'a Mic-E report is not compressed');
   if (!(d.latitude >= -90 && d.latitude <= 90)) flag(numberFault(d.latitude), `latitude ${d.latitude} is out of range`);
   if (!(d.longitude >= -180 && d.longitude <= 180)) flag(numberFault(d.longitude), `longitude ${d.longitude} is out of range`);
@@ -865,15 +886,18 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   if (d.altitudeFeet !== undefined) {
     if (!Number.isFinite(d.altitudeFeet)) flag('not-a-number', 'altitude is not a number');
     // A builder always sends the Mic-E bytes; decoded data written back keeps the `/A=` it came from.
-    const inText = d.altitudeInComment || (!micEAltitudeBytesOnly(d) && Number.isFinite(d.altitudeFeet) && micEAltitudeInText(d.altitudeFeet));
-    if (inText) altitudeInComment = d.altitudeFeet;
+    const form = altitudeForm ?? micEAltitudeForm(d);
+    if (form === 'text') {
+      if (!d.altitudeInComment && !micEAltitudeInAltitude(d.altitudeFeet)) flag('value-has-no-form', 'a /A= does not hold this Mic-E altitude exactly');
+      altitudeInComment = d.altitudeFeet;
+    }
     else if (Number.isFinite(d.altitudeFeet)) {
       const alt = micEAltitudeBytes(d.altitudeFeet);
       // With no type code the first altitude byte would be read as one: the Mic-E bytes have no
       // clean form, so a `/A=` takes the altitude when it holds it exactly, else it has no form.
       if (alt.length > 0 && d.typeCode === undefined && text.length === 0 && '`\'>] '.includes(alt[0]!)) {
         const feet = d.altitudeFeet;
-        if (!micEAltitudeBytesOnly(d) && nearlyWhole(feet) && Math.round(feet) >= -99999 && Math.round(feet) <= 999999) altitudeInComment = feet;
+        if (micEAltitudeInAltitude(feet)) altitudeInComment = feet;
         else flag('value-has-no-form', 'a Mic-E altitude whose first byte is a type code character has no form');
       } else text += alt;
     }

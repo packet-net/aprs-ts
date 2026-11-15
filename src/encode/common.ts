@@ -72,12 +72,30 @@ export function givenTwiceReason(data: object): string | undefined {
   return givenTwice.get(data);
 }
 
-const micEAltitudeBytes = new WeakSet<object>();
+const micEAltitudeBytes = new WeakMap<object, number>();
 
 /** Marks Mic-E data whose altitude a builder rounded to the metre: it goes in the Mic-E altitude bytes, never a `/A=`. */
-export function markMicEAltitudeBytesOnly<T extends object>(data: T): T {
-  micEAltitudeBytes.add(data);
+export function markMicEAltitudeBytesOnly<T extends object>(data: T, given: number): T {
+  micEAltitudeBytes.set(data, given);
   return data;
+}
+
+const emptyMessageIds = new WeakSet<object>();
+
+/** Marks message data a builder was given an empty message ID for: a builder's empty ID is refused, where neutral data's is no ID. */
+export function markEmptyMessageId<T extends object>(data: T): T {
+  emptyMessageIds.add(data);
+  return data;
+}
+
+/** Whether message data was marked as given an empty message ID by a builder. */
+export function hasEmptyMessageId(data: object): boolean {
+  return emptyMessageIds.has(data);
+}
+
+/** The altitude in feet a builder was given, before it was rounded to the metre; `undefined` for data not marked. */
+export function micEAltitudeGiven(data: object): number | undefined {
+  return micEAltitudeBytes.get(data);
 }
 
 /** Whether Mic-E data was marked to send its altitude in the Mic-E altitude bytes only. */

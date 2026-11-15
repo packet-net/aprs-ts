@@ -246,7 +246,8 @@ function withoutInnerInfo(n: Neutral): Neutral {
   if (n.type !== 'third-party' || !isObject(packet)) return n;
   const copy: Neutral = { ...packet };
   if (Array.isArray(copy.diagnostics)) {
-    const kept = (copy.diagnostics as string[]).filter((d) => !d.startsWith('info:'));
+    // Warnings and errors are data, compared as a multiset: their order carries nothing.
+    const kept = (copy.diagnostics as string[]).filter((d) => !d.startsWith('info:')).sort();
     if (kept.length > 0) copy.diagnostics = kept;
     else delete copy.diagnostics;
   }

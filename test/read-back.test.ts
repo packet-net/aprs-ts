@@ -364,3 +364,64 @@ describe('what the comparison is given is checked on the data, not on the types'
     }
   });
 });
+
+describe('the header comes before the data, in the form written', () => {
+  const tooLongObject = (p: ReturnType<typeof Aprs.from>) => p.object('TOOLONGNAME', 1, 2).timestamp(new Date('2026-09-27T09:23:45Z'), 'dhm-zulu');
+
+  it('refuses an unwritable path with the header code of the form, before a fault in the data', () => {
+    const p = Aprs.from('N0CALL').via('WIDE1-1', 'N0CALL-1*');
+    expect(() => tooLongObject(p).build()).toThrow(expect.objectContaining({ code: 'tnc2-cannot-carry' }));
+    expect(() => tooLongObject(p).build('ax25')).toThrow(expect.objectContaining({ code: 'ax25-cannot-carry' }));
+  });
+
+  it('refuses a call a frame cannot carry before a fault in the data, writing a frame', () => {
+    const p = Aprs.from('N0CALLXYZ');
+    expect(() => tooLongObject(p).build('ax25')).toThrow(expect.objectContaining({ code: 'ax25-cannot-carry' }));
+    expect(() => tooLongObject(p).build()).toThrow(expect.objectContaining({ code: 'invalid-name' }));
+  });
+
+  it('builds sound data with a header one form cannot carry, and refuses it when written', () => {
+    const built = Aprs.from('N0CALLXYZ').status('hi').build();
+    expect(built.toTnc2()).toBe('N0CALLXYZ>APZ001:>hi');
+    expect(() => built.toAx25()).toThrow(expect.objectContaining({ code: 'ax25-cannot-carry' }));
+  });
+});
+
+describe('a held packet with an empty destination', () => {
+  it('is written empty in a line and as six spaces in a frame, which read back the same', () => {
+    const packet = decodeTnc2('N0CALL>:>x');
+    expect(packetToTnc2(packet)).toBe('N0CALL>:>x');
+    expect(bytesToHex(packetToAx25(packet)).slice(0, 14).toLowerCase()).toBe('404040404040e0');
+    expect(decodeAx25(packetToAx25(packet)).destination).toBe('');
+  });
+});
+
+describe('a builder message ID that is empty is refused, neutral data that is empty is no ID', () => {
+  it('refuses a builder with invalid-message-id', () => {
+    expect(() => Aprs.from('N0CALL').message('N0CALL', 'hi').messageId('').build()).toThrow(expect.objectContaining({ code: 'invalid-message-id' }));
+    expect(() => Aprs.from('N0CALL').message('N0CALL', 'hi').messageId('').replyAck('').build()).toThrow(expect.objectContaining({ code: 'invalid-message-id' }));
+  });
+  it('writes neutral data with an empty ID as no ID, and refuses it beside a reply-ack', () => {
+    expect(new TextDecoder().decode(encodeInformation({ type: 'message', addressee: 'N0CALL', text: 'hi', messageId: '' }).information)).toBe(':N0CALL   :hi');
+    expect(() => encodeInformation({ type: 'message', addressee: 'N0CALL', text: 'hi', messageId: '', replyAck: '' })).toThrow(expect.objectContaining({ code: 'missing-field' }));
+  });
+});
+
+describe('a Mic-E altitude takes a /A= when the comment holds one and the /A= holds it exactly', () => {
+  it('writes the bytes first, then a /A= for a builder, and refuses what no form holds', () => {
+    const built = Aprs.from('N0CALL').micE(51.5, -0.5).symbol('/>').micEMessage('en-route').altitudeFeet(1000).comment('/A=001234 x').build();
+    expect(new TextDecoder().decode(built.information)).toContain('/A=001000//A=001234 x');
+    expect(() => Aprs.from('N0CALL').micE(51.5, -0.5).symbol('/>').micEMessage('en-route').altitudeFeet(100.5).comment('/A=001234 x').build()).toThrow(expect.objectContaining({ code: 'text-reads-as-field' }));
+  });
+});
+
+describe('a third-party packet', () => {
+  it('writes an inner packet that carries warnings as received: they are data, read back with it', () => {
+    const inner = decodeTnc2('A>B:@092345z4903.50n/07201.75w>');
+    expect(inner.diagnostics.filter((d) => d.severity === 'warning').length).toBe(2);
+    const written = encodeInformation({ type: 'third-party', packet: inner });
+    expect(new TextDecoder().decode(written.information)).toBe('}A>B:@092345z4903.50n/07201.75w>');
+    // Neutral data without the warnings is checked by the rules first, and would read back with them.
+    expect(() => encodeInformation({ type: 'third-party', packet: { ...inner, information: new Uint8Array(0), diagnostics: [] } })).not.toThrow();
+  });
+});
