@@ -317,9 +317,8 @@ export function tnc2TextOf(bytes: Uint8Array): string {
 /** Encodes a packet as the bytes of a TNC2 / APRS-IS line (the information field as sent). */
 export function encodeTnc2Bytes(p: PacketToEncode): Uint8Array {
   return guarded(() => {
-    // The header is written first, so its faults come before any in the data.
+    // An address APRS-IS does not allow comes first; a header the line cannot carry after the data (R25).
     checkHeaderAddresses(p.source, givenDestination(p), p.path ?? []);
-    tnc2BytesOf(p.source, givenDestination(p), p.path ?? [], new Uint8Array(0));
     const r = resolve(p);
     checkHeaderAddresses(p.source, r.destination, r.path);
     return tnc2BytesOf(p.source, r.destination, r.path, r.information);
@@ -377,8 +376,8 @@ export function ax25Of(source: string, destination: string, path: readonly (stri
 /** Encodes a packet as an AX.25 UI frame in KISS form (no flags, no FCS). */
 export function encodeAx25(p: PacketToEncode): Uint8Array {
   return guarded(() => {
-    // The header is written first, so what AX.25 cannot carry comes before any fault in the data.
-    ax25Of(p.source, givenDestination(p), p.path ?? [], new Uint8Array(0));
+    // An address APRS-IS does not allow comes first; a header the frame cannot carry after the data (R25).
+    checkHeaderAddresses(p.source, givenDestination(p), p.path ?? []);
     const r = resolve(p);
     return ax25Of(p.source, r.destination, r.path, r.information);
   });

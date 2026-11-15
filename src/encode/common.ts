@@ -25,13 +25,14 @@ export function refuse(code: RefusalCode, reason: string): never {
 
 /**
  * The order in which several faults in one packet are reported: the first code that applies wins
- * (vectors refusals: DESIGN rulings, R1). The header comes first, a field wrong on its own is
- * wrong whatever else is given, then what the frame cannot hold, then the companions, and the
- * read-back safety nets last.
+ * (vectors refusals: DESIGN rulings, R1). A header address APRS-IS does not allow comes
+ * first, a field wrong on its own is wrong whatever else is given, then what the frame cannot
+ * hold, then the companions, the read-back safety nets, the size, and last what the form written cannot
+ * carry of the header (R25).
  */
 const REFUSAL_ORDER: readonly RefusalCode[] = [
   'not-encodable',
-  'invalid-address', 'ax25-cannot-carry', 'tnc2-cannot-carry', 'invalid-third-party-header',
+  'invalid-address', 'invalid-third-party-header',
   'invalid-addressee', 'invalid-name', 'invalid-timestamp', 'not-a-number', 'value-out-of-range',
   'value-has-no-form', 'invalid-code', 'invalid-symbol', 'invalid-character', 'too-long',
   'padding-space', 'malformed', 'invalid-message-id', 'invalid-nmea',
@@ -39,6 +40,7 @@ const REFUSAL_ORDER: readonly RefusalCode[] = [
   'text-reads-as-field',
   'does-not-read-back',
   'information-field-too-long',
+  'ax25-cannot-carry', 'tnc2-cannot-carry',
 ];
 
 /** Where a code sits in the reporting order; a code outside it comes last. */

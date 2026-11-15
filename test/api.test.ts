@@ -553,7 +553,7 @@ describe('1.0 API', () => {
     });
 
     it('names AX.25 and TNC2 refusals', () => {
-      expect(codeOf(() => encodeAx25({ source: 'TOOLONGCALL', destination: 'APRS', path: [], data: { type: 'status', text: 'x' } } as never))).toBe('ax25-cannot-carry');
+      expect(codeOf(() => encodeAx25({ source: 'TOOLONGCALL', destination: 'APRS', path: [], data: { type: 'status', text: 'x' } } as never))).toBe('invalid-address');
       expect(codeOf(() => packetToAx25(decodeTnc2('WB4APR-00>APRS:>x')))).toBe('ax25-cannot-carry');
     });
 

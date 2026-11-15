@@ -365,19 +365,12 @@ describe('what the comparison is given is checked on the data, not on the types'
   });
 });
 
-describe('the header comes before the data, in the form written', () => {
+describe('a data fault comes before a header the form cannot carry (R25)', () => {
   const tooLongObject = (p: ReturnType<typeof Aprs.from>) => p.object('TOOLONGNAME', 1, 2).timestamp(new Date('2026-09-27T09:23:45Z'), 'dhm-zulu');
 
-  it('refuses an unwritable path with the header code of the form, before a fault in the data', () => {
-    const p = Aprs.from('N0CALL').via('WIDE1-1', 'N0CALL-1*');
-    expect(() => tooLongObject(p).build()).toThrow(expect.objectContaining({ code: 'tnc2-cannot-carry' }));
-    expect(() => tooLongObject(p).build('ax25')).toThrow(expect.objectContaining({ code: 'ax25-cannot-carry' }));
-  });
-
-  it('refuses a call a frame cannot carry before a fault in the data, writing a frame', () => {
-    const p = Aprs.from('N0CALLXYZ');
-    expect(() => tooLongObject(p).build('ax25')).toThrow(expect.objectContaining({ code: 'ax25-cannot-carry' }));
-    expect(() => tooLongObject(p).build()).toThrow(expect.objectContaining({ code: 'invalid-name' }));
+  it('refuses the data first when building, whatever the path or call', () => {
+    expect(() => tooLongObject(Aprs.from('N0CALL').via('WIDE1-1', 'N0CALL-1*')).build()).toThrow(expect.objectContaining({ code: 'invalid-name' }));
+    expect(() => tooLongObject(Aprs.from('N0CALLXYZ')).build()).toThrow(expect.objectContaining({ code: 'invalid-name' }));
   });
 
   it('builds sound data with a header one form cannot carry, and refuses it when written', () => {

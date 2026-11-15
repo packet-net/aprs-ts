@@ -381,13 +381,8 @@ function buildRecord(index, line) {
   // The line and the frame are each written by the library, which reads their headers back: a
   // header one form cannot carry is refused there (tnc2-cannot-carry or ax25-cannot-carry), and
   // whatever the library gives is the record, never the tool's own judgement.
-  let frame = packet ? frameOf(packet) : {};
-  if (!packet && r.result === 'refused') {
-    // Refused in building: the frame is written in its own form, which decides the header refusal that comes before a fault in the data.
-    const f = buildRecipe(n, recipe, 'ax25');
-    if (f.result === 'refused') frame = { ax25: 'refused', ax25_refusal: f.refusal };
-    else if (f.packet) frame = frameOf(f.packet);
-  }
+  // A record refused for its data carries that refusal in the ax25 column too: the data fault comes first.
+  const frame = packet ? frameOf(packet) : r.result === 'refused' ? { ax25: 'refused', ax25_refusal: r.refusal } : {};
   if (r.result !== 'built') return { ...r, ...frame };
   return { n, result: 'built', tnc2: bytesToHex(bytes), again: decodedAgain(bytes, true), ...frame };
 }

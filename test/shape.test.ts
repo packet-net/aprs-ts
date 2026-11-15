@@ -121,7 +121,7 @@ describe('the header comes first', () => {
     expect(outcome(() => Aprs.from('BAD!!').micE(49.5, -72.75).courseDegrees(999).speedKnots(1).build())).toBe('invalid-address');
     const bad = { type: 'position', ...at, courseDegrees: 999, speedKnots: 1 } as unknown as AprsData;
     expect(outcome(() => encodeTnc2({ source: 'BAD!!', data: bad }))).toBe('invalid-address');
-    expect(outcome(() => encodeAx25({ source: 'TOOLONGCALL', data: bad }))).toBe('ax25-cannot-carry');
+    expect(outcome(() => encodeAx25({ source: 'TOOLONGCALL', data: bad }))).toBe('invalid-address');
     expect(outcome(() => Aprs.from('M0LTE').position(49.5, -72.75).courseDegrees(999).speedKnots(1).build())).toBe('value-out-of-range');
   });
 });

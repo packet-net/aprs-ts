@@ -261,10 +261,9 @@ export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
   }
 
   /** Builds a recipe: the packet, or the refusal or unsupported record. */
-  function buildOnce(n, recipe, write = 'tnc2') {
+  function buildOnce(n, recipe) {
     try {
-      // The form the packet is written in decides which header refusal comes before a fault in the data.
-      return { packet: builderFor(recipe).build(write) };
+      return { packet: builderFor(recipe).build() };
     } catch (e) {
       if (e instanceof Unsupported) return { record: { n, result: 'unsupported', reason: e.message } };
       if (isRefusal(e)) return { record: refusalRecord(n, e) };
@@ -282,7 +281,7 @@ export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
         for (const pair of twice) delete a[pair[i]];
         return { ...recipe, args: a };
       };
-      const results = [buildOnce(n, without(1), write), buildOnce(n, without(0), write)].map((r) => r.record ?? { result: 'built' });
+      const results = [buildOnce(n, without(1)), buildOnce(n, without(0))].map((r) => r.record ?? { result: 'built' });
       const other = results.find((r) => r.result === 'unsupported');
       if (other) return other;
       const refusals = results.filter((r) => r.result === 'refused');
@@ -291,7 +290,7 @@ export function recipeBuilder({ Aprs, AprsEncodeError, refusalRank }) {
       refusals.push({ n, result: 'refused', reason: `${twice.map((p) => p.join(' and ')).join(', ')} given together`, refusal: 'value-given-twice', via: 'tool' });
       return refusals.reduce((b, r) => (refusalRank(r.refusal) < refusalRank(b.refusal) ? r : b));
     }
-    const once = buildOnce(n, recipe, write);
+    const once = buildOnce(n, recipe);
     if (once.record) return once.record;
     // The packet is written as a TNC2 line, or an AX.25 frame when the case says so; the header is
     // read back as it is written, so a path the form cannot carry is refused here, not at build.

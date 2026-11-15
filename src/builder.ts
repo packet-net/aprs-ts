@@ -14,7 +14,7 @@
 // `AprsEncodeError` that says why.
 
 import { AprsEncodeError, DEFAULT_DESTINATION, firstRefusal, markEmptyMessageId, markGivenTwice, markMicEAltitudeBytesOnly, nearest, numberFault, refuse } from './encode/common.js';
-import { ax25Of, checkHeaderAddresses, encodeInformation, type EncodedInformation, passedReadBack, tnc2BytesOf, tnc2TextOf, wrapKiss } from './encode/index.js';
+import { ax25Of, checkHeaderAddresses, encodeInformation, passedReadBack, tnc2BytesOf, tnc2TextOf, wrapKiss } from './encode/index.js';
 import { symbolOf } from './symbols.js';
 import type {
   AprsData,
@@ -63,38 +63,18 @@ function pathEntryOf(entry: string | PathEntry): PathEntry {
   return entry.endsWith('*') ? { address: entry.slice(0, -1), used: true } : { address: entry, used: false };
 }
 
-/** The form a built packet is going to be written in, which decides the header refusal that comes before a fault in the data. */
-export type HeaderForm = 'tnc2' | 'ax25';
-
 /**
  * Encodes the data and checks the header's addresses, so a `BuiltPacket` can always be written.
- * The header is written first, so its faults come before any in the data (vectors README, Refusal
- * reasons): an address APRS-IS does not allow at once, and a header the form cannot carry (a path
- * entry not marked used before a used one, a call of nine characters in a frame) when the data is
- * at fault too. A packet with such a header and sound data is built, and refused when it is
- * written. A Mic-E destination is computed, and always a valid address.
+ * An address APRS-IS does not allow is refused first, then the data; a header a form cannot carry
+ * (a path entry not marked used before a used one, a call a frame cannot carry) is refused only
+ * by the call that writes that form. A Mic-E destination is computed, and always a valid address.
  */
-function built(header: Header, makeData: () => AprsData, form: HeaderForm, micE = false): BuiltPacket {
+function built(header: Header, makeData: () => AprsData, micE = false): BuiltPacket {
   const path = header.path.map((e) => Object.freeze({ ...e }));
   const given = micE ? DEFAULT_DESTINATION : (header.destination ?? DEFAULT_DESTINATION);
   checkHeaderAddresses(header.source, given, path);
-  let headerFault: AprsEncodeError | undefined;
-  try {
-    if (form === 'ax25') ax25Of(header.source, given, path, new Uint8Array(0));
-    else tnc2BytesOf(header.source, given, path, new Uint8Array(0));
-  } catch (e) {
-    if (!(e instanceof AprsEncodeError)) throw e;
-    headerFault = e;
-  }
-  let data: AprsData;
-  let encoded: EncodedInformation;
-  try {
-    data = makeData();
-    encoded = passedReadBack(encodeChecked(data));
-  } catch (e) {
-    if (headerFault !== undefined && e instanceof AprsEncodeError) throw headerFault;
-    throw e;
-  }
+  const data = makeData();
+  const encoded = passedReadBack(encodeChecked(data));
   const destination = encoded.destination ?? header.destination ?? DEFAULT_DESTINATION;
   checkHeaderAddresses(header.source, destination, path);
   const information = encoded.information;
@@ -354,8 +334,8 @@ export class DataBuilder {
   ) {}
 
   /** Encodes the packet; throws `AprsEncodeError` if the spec does not allow it. */
-  build(form: HeaderForm = 'tnc2'): BuiltPacket {
-    return built(this.header, () => (typeof this.value === 'function' ? this.value() : this.value), form);
+  build(): BuiltPacket {
+    return built(this.header, () => (typeof this.value === 'function' ? this.value() : this.value));
   }
 
   /** Shorthand for `build().toTnc2()`. */
@@ -514,7 +494,7 @@ export class PositionBuilder extends ReportBuilder<PositionBuilder> {
     return this;
   }
 
-  build(form: HeaderForm = 'tnc2'): BuiltPacket {
+  build(): BuiltPacket {
     return built(
       this.header,
       () => {
@@ -524,7 +504,7 @@ export class PositionBuilder extends ReportBuilder<PositionBuilder> {
         if (this.messagingValue) data.messaging = true;
         return data;
       },
-      form,
+      
     );
   }
 
@@ -563,7 +543,7 @@ export class ObjectBuilder extends ReportBuilder<ObjectBuilder> {
     return this;
   }
 
-  build(form: HeaderForm = 'tnc2'): BuiltPacket {
+  build(): BuiltPacket {
     return built(
       this.header,
       () => {
@@ -577,7 +557,7 @@ export class ObjectBuilder extends ReportBuilder<ObjectBuilder> {
         if (this.killedValue) data.killed = true;
         return data;
       },
-      form,
+      
     );
   }
 
@@ -609,7 +589,7 @@ export class ItemBuilder extends ReportBuilder<ItemBuilder> {
     return this;
   }
 
-  build(form: HeaderForm = 'tnc2'): BuiltPacket {
+  build(): BuiltPacket {
     return built(
       this.header,
       () => {
@@ -618,7 +598,7 @@ export class ItemBuilder extends ReportBuilder<ItemBuilder> {
         if (this.killedValue) data.killed = true;
         return data;
       },
-      form,
+      
     );
   }
 
@@ -674,7 +654,7 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
     return this;
   }
 
-  build(form: HeaderForm = 'tnc2'): BuiltPacket {
+  build(): BuiltPacket {
     return built(
       this.header,
       () => {
@@ -694,7 +674,7 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
         if (this.oldValue) data.oldData = true;
         return data;
       },
-      form, true,
+      true,
     );
   }
 
@@ -726,7 +706,7 @@ export class MessageBuilder {
     return this;
   }
 
-  build(form: HeaderForm = 'tnc2'): BuiltPacket {
+  build(): BuiltPacket {
     return built(
       this.header,
       () => {
@@ -741,7 +721,7 @@ export class MessageBuilder {
         if (this.idValue === '') markEmptyMessageId(data);
         return data;
       },
-      form,
+      
     );
   }
 
@@ -791,7 +771,7 @@ export class StatusBuilder {
     return this;
   }
 
-  build(form: HeaderForm = 'tnc2'): BuiltPacket {
+  build(): BuiltPacket {
     return built(
       this.header,
       () => {
@@ -803,7 +783,7 @@ export class StatusBuilder {
         if (this.text !== undefined && this.text.length > 0) data.text = this.text;
         return data;
       },
-      form,
+      
     );
   }
 
@@ -829,7 +809,7 @@ export class TelemetryBuilder {
     return this;
   }
 
-  build(form: HeaderForm = 'tnc2'): BuiltPacket {
+  build(): BuiltPacket {
     return built(
       this.header,
       () => {
@@ -846,7 +826,7 @@ export class TelemetryBuilder {
         if (this.commentValue !== undefined && this.commentValue.length > 0) data.comment = this.commentValue;
         return data;
       },
-      form,
+      
     );
   }
 
