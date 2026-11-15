@@ -708,7 +708,7 @@ export function liftTelemetryAndDao(
   return out;
 }
 
-const ALTITUDE_RE = /\/A=(-[0-9]{5}|[0-9]{6})/;
+export const ALTITUDE_RE = /\/A=(-[0-9]{5}|[0-9]{6})/;
 
 /** Lifts the structured elements out of a comment, in the order the vectors' README gives. */
 function liftComment(ctx: DecodeContext, text: string, options: LiftOptions): Lifted {

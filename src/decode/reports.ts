@@ -25,6 +25,7 @@ import {
   maskRange,
   METRES_PER_FOOT,
   parsePosition,
+  ALTITUDE_RE,
   parsePositionlessWeather,
   positionDecodesAt,
   stripLifts,
@@ -357,6 +358,15 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     if (deviceSuffix !== undefined) text = text.slice(0, text.length - deviceSuffix.length);
   }
   let altitudeFeet: number | undefined;
+  let pendingLaterWarning = false;
+  const flushLaterWarning = (): void => {
+    if (pendingLaterWarning) ctx.allows('mic-e-altitude-not-first');
+    pendingLaterWarning = false;
+  };
+  const missingSpace = (): void => {
+    if (ctx.options.tolerates('missing-space-after-locator')) flushLaterWarning();
+    ctx.tolerate('missing-space-after-locator');
+  };
   let extension: ExtensionFound | undefined;
   let extensionAfterLocator = false;
   let spacelessExtension = false;
@@ -401,11 +411,24 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     // A locator at the start is taken before a later altitude is looked for, and the altitude
     // search never uses its bytes (vectors rulings).
     const locEnd = loc && !(extension && !extensionAfterLocator) ? loc[0].length : 0;
+    // It never uses a byte of a `/A=` altitude that stands whole as sent (as it never uses a
+    // locator's or a PHG's): `x/A=000100}` is an altitude of 100 feet and the comment `x}`.
     const laterRe = /([!-{]{3})\}/g;
     laterRe.lastIndex = locEnd;
-    const later = laterRe.exec(text);
+    const wholeAltitude = new RegExp(ALTITUDE_RE.source, 'g');
+    let later = laterRe.exec(text);
+    let alt = wholeAltitude.exec(text);
+    while (later) {
+      // Both are found in order and each altitude is passed once, so the search is one pass.
+      while (alt && alt.index + alt[0].length <= later.index) alt = wholeAltitude.exec(text);
+      if (!alt || alt.index >= later.index + 4) break;
+      laterRe.lastIndex = later.index + 1;
+      later = laterRe.exec(text);
+    }
     // A strict decoder declines a later altitude and leaves it as text.
-    if (later && ctx.allows('mic-e-altitude-not-first')) {
+    // A missing locator space is always met first (RULED R9), so the warning waits for it.
+    if (later && ctx.options.tolerates('mic-e-altitude-not-first')) {
+      pendingLaterWarning = true;
       altitudeFeet = (base91Value(later[1]!) - 10000) / METRES_PER_FOOT;
       text = maskRange(text, later.index, later.index + 4);
     }
@@ -430,15 +453,16 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     if (spacelessExtension) {
       // The extension is already out of the text, so a space now at its start is the comment's
       // own leading delimiter, dropped once with the rest (not the locator's missing space).
-      ctx.tolerate('missing-space-after-locator');
+      missingSpace();
     } else if (left.length > 0) {
       if (left[0] === ' ') {
         let k = 0;
         while (isLiftMark(text[k])) k++;
         text = text.slice(0, k) + text.slice(k + 1);
-      } else ctx.tolerate('missing-space-after-locator');
+      } else missingSpace();
     }
   }
+  flushLaterWarning();
   // After a locator, a PHG or RNG not there as sent (found only once something is lifted) is late.
   const afterLocatorLate = !!loc && !extension && extensionLooked;
   const { lifted } = liftMicEComment(ctx, text, pos.symbol, extension, pre, !afterLocatorLate);

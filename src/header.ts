@@ -62,7 +62,7 @@ export function parseTnc2Header(line: Uint8Array, options: ParseOptions): Parsed
     const colon = line.indexOf(0x3a);
     if (colon < 0) fail(diags, 'invalid-header');
     const header = bytesToBinary(line, 0, colon);
-    const info = line.slice(colon + 1);
+    const info = new Uint8Array(line.subarray(colon + 1)); // a copy: Buffer#slice is a view
     const parsed = parseHeaderText(header, options, diags);
     return { ...parsed, info, diagnostics: diags };
   } catch (e) {
@@ -226,7 +226,7 @@ export function parseAx25Frame(frame: Uint8Array, options: ParseOptions): Parsed
       source: src!.text,
       destination: dest!.text,
       path,
-      info: frame.slice(offset + 2),
+      info: new Uint8Array(frame.subarray(offset + 2)), // a copy: Buffer#slice is a view
       diagnostics: diags,
     };
   } catch (e) {
