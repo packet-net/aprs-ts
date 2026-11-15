@@ -21,9 +21,9 @@ describe('Mic-E locator space', () => {
   });
 
   it.each([
-    ['IO91/G|!:&0hl!Y[/>"4e}=\'p|  x', 'x'],
-    ['IO91/G|!:&0hl!Y[/>"4e}=\'p|   x', ' x'],
-  ])('telemetry left once an altitude is lifted, then spaces: %j', (info, want) => {
+    ['IO91/G|!:&0hl!Y[/>"4e}=\'p|  x', "|!:&0hl!Y[/>='p|  x"],
+    ['IO91/G|!:&0hl!Y[/>"4e}=\'p|   x', "|!:&0hl!Y[/>='p|   x"],
+  ])('telemetry split by an altitude is text, kept as sent: %j', (info, want) => {
     expect(comment(info)).toBe(want);
   });
 

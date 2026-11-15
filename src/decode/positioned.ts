@@ -514,27 +514,61 @@ function frequencyMhz(whole: string, fraction: string): number {
 
 interface FrequencyFound {
   frequency: VoiceFrequency;
-  length: number;
+  /** Where the frequency and its fields end in the working text. */
+  end: number;
 }
 
-/** Parses a voice frequency and its tone, offset and range fields at the start of `s`. */
-function frequencyAt(s: string): FrequencyFound | undefined {
-  let m = FREQ_KHZ_RE.exec(s);
+// ---- lift marks
+
+/**
+ * Elements are lifted from a working copy of the text by overwriting their bytes with a mark, so
+ * indices stay those of the text as sent and no recogniser, whose character classes never take a
+ * mark, reads across a lifted element. The comment is the text left with the marks removed.
+ */
+const LIFT = '\u0100';
+/** The mark for a lifted `/A=` altitude, the one element a frequency's fields read past. */
+const LIFT_ALTITUDE = '\u0101';
+
+export function isLiftMark(c: string | undefined): boolean {
+  return c === LIFT || c === LIFT_ALTITUDE;
+}
+
+export function maskRange(s: string, a: number, b: number, mark: string = LIFT): string {
+  return s.slice(0, a) + mark.repeat(b - a) + s.slice(b);
+}
+
+/** The text left: `s` without its lift marks. */
+export function stripLifts(s: string): string {
+  return s.replace(/[\u0100\u0101]/g, '');
+}
+
+/**
+ * Parses a voice frequency and its tone, offset and range fields from `from` in `s`, a working text
+ * where each lifted element is a run of lift marks. The frequency and each field stand whole in
+ * the text; a field is complete when a space, the end or any mark follows it, and only a lifted
+ * `/A=` may stand between the frequency or a field and the next field's leading space.
+ */
+function frequencyAt(s: string, from: number): FrequencyFound | undefined {
+  const t = s.slice(from);
+  let m = FREQ_KHZ_RE.exec(t);
   let tenKhz = false;
   if (!m) {
-    m = FREQ_10KHZ_RE.exec(s);
+    m = FREQ_10KHZ_RE.exec(t);
     tenKhz = true;
   }
   if (!m) return undefined;
   let freq: { -readonly [K in keyof VoiceFrequency]: VoiceFrequency[K] } = { mhz: frequencyMhz(m[1]!, m[2]!) };
   if (tenKhz) freq.tenKhzResolution = true;
-  let p = m[0].length;
+  let p = from + m[0].length;
   const fieldAt = (re: RegExp): RegExpExecArray | undefined => {
-    if (s[p] !== ' ') return undefined;
-    const r = re.exec(s.slice(p + 1));
+    let q = p;
+    while (s[q] === LIFT_ALTITUDE) q++;
+    if (s[q] !== ' ') return undefined;
+    const r = re.exec(s.slice(q + 1));
     if (!r) return undefined;
-    const after = s[p + 1 + r[0].length];
-    if (after !== undefined && after !== ' ') return undefined;
+    const after = s[q + 1 + r[0].length];
+    if (after !== undefined && after !== ' ' && !isLiftMark(after)) return undefined;
+    p = q;
     return r;
   };
   let r = fieldAt(/^(?:([TtCcDd])([0-9]{3})|([Tt])off|(1|l)750)/);
@@ -563,9 +597,7 @@ function frequencyAt(s: string): FrequencyFound | undefined {
     if (r[2] === 'k') freq.rangeKm = true;
     p += 1 + r[0].length;
   }
-  // One space after the frequency and its fields is a separator.
-  if (s[p] === ' ') p++;
-  return { frequency: sortFrequency(freq), length: p };
+  return { frequency: sortFrequency(freq), end: p };
 }
 
 function sortFrequency(f: VoiceFrequency): VoiceFrequency {
@@ -615,8 +647,6 @@ interface LiftOptions {
   extensionAtStart?: boolean;
   /** A data extension already read from the start of the text (Mic-E status text). */
   extension?: ExtensionFound;
-  /** Places in the text where something was already taken out (Mic-E status text). */
-  joins?: readonly number[];
   symbol: AprsSymbol;
   /** An area object's line shape, whose corridor width may be in braces. */
   areaLine?: boolean;
@@ -624,7 +654,7 @@ interface LiftOptions {
   pre?: PreLifted;
 }
 
-/** Base-91 telemetry and a `!DAO!` lifted out of text, and the text left. */
+/** Base-91 telemetry and a `!DAO!` lifted out of text; `rest` is the text with their places marked. */
 export interface PreLifted {
   telemetry?: CommentTelemetry;
   dao?: DaoFound;
@@ -646,30 +676,18 @@ interface Lifted {
   rest: string;
 }
 
-function removeRanges(s: string, ranges: readonly [number, number][]): string {
-  const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
-  let out = '';
-  let from = 0;
-  for (const [a, b] of sorted) {
-    out += s.slice(from, a);
-    from = b;
-  }
-  return out + s.slice(from);
-}
-
 /**
- * Lifts base-91 telemetry and the last `!DAO!` outside it. A `!DAO!` is five bytes as sent, so one
- * is never read across a `join`, a place in `s` where another element was already taken out.
+ * Lifts base-91 telemetry and the last `!DAO!` outside it, each only where its bytes stand whole in
+ * `s`; their places are marked in `rest`, so nothing is read across them. `removed` holds the
+ * ranges taken out.
  */
 export function liftTelemetryAndDao(
   s: string,
-  joins: readonly number[] = [],
-): { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; cuts: number[]; removed: readonly [number, number][] } {
+): { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; removed: readonly [number, number][] } {
   const tel = findCommentTelemetry(s);
   let dao: DaoFound | undefined;
   for (let p = s.length - 5; p >= 0; p--) {
     if (tel && p + 5 > tel.start && p < tel.end) continue;
-    if (joins.some((j) => j > p && j < p + 5)) continue;
     const found = daoAt(s, p);
     if (found) {
       dao = found;
@@ -679,16 +697,10 @@ export function liftTelemetryAndDao(
   const ranges: [number, number][] = [];
   if (tel) ranges.push([tel.start, tel.end]);
   if (dao) ranges.push([dao.start, dao.start + 5]);
-  // Where, in the text left, something was taken out.
-  let removed = 0;
-  const cuts: number[] = [];
-  for (const [a, b] of [...ranges].sort((x, y) => x[0] - y[0])) {
-    cuts.push(a - removed);
-    removed += b - a;
-  }
-  const out: { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; cuts: number[]; removed: readonly [number, number][] } = {
-    rest: removeRanges(s, ranges),
-    cuts,
+  let rest = s;
+  for (const [a, b] of ranges) rest = maskRange(rest, a, b);
+  const out: { telemetry?: CommentTelemetry; dao?: DaoFound; rest: string; removed: readonly [number, number][] } = {
+    rest,
     removed: ranges,
   };
   if (tel) out.telemetry = tel.telemetry;
@@ -700,7 +712,7 @@ const ALTITUDE_RE = /\/A=(-[0-9]{5}|[0-9]{6})/;
 
 /** Lifts the structured elements out of a comment, in the order the vectors' README gives. */
 function liftComment(ctx: DecodeContext, text: string, options: LiftOptions): Lifted {
-  const first = options.pre ? { ...options.pre, rest: text } : liftTelemetryAndDao(text, options.joins);
+  const first = options.pre ? { telemetry: options.pre.telemetry, dao: options.pre.dao, rest: text } : liftTelemetryAndDao(text);
   const lifted: Lifted = { rest: first.rest };
   if (first.telemetry) lifted.telemetry = first.telemetry;
   if (first.dao) lifted.dao = first.dao;
@@ -713,7 +725,7 @@ function liftComment(ctx: DecodeContext, text: string, options: LiftOptions): Li
     const ext = extensionAt(s, 0);
     if (ext) {
       applyExtension(lifted, ext);
-      s = s.slice(ext.length);
+      s = maskRange(s, 0, ext.length);
       extensionFound = true;
     }
   }
@@ -721,7 +733,7 @@ function liftComment(ctx: DecodeContext, text: string, options: LiftOptions): Li
   const alt = ALTITUDE_RE.exec(s);
   if (alt) {
     lifted.altitudeFeet = Number(alt[1]);
-    s = s.slice(0, alt.index) + s.slice(alt.index + alt[0].length);
+    s = maskRange(s, alt.index, alt.index + alt[0].length, LIFT_ALTITUDE);
   }
   // Signpost or corridor braces.
   if (isSignpost(options.symbol) || options.areaLine) {
@@ -733,7 +745,7 @@ function liftComment(ctx: DecodeContext, text: string, options: LiftOptions): Li
     if (brace) {
       if (signpost) lifted.signpost = brace[1]!;
       else lifted.corridorWidthMiles = Number(brace[1]);
-      s = s.slice(0, brace.index) + s.slice(brace.index + brace[0].length);
+      s = maskRange(s, brace.index, brace.index + brace[0].length);
     }
   }
   // A data extension later in the text, only when none came straight after the symbol.
@@ -741,23 +753,29 @@ function liftComment(ctx: DecodeContext, text: string, options: LiftOptions): Li
     const later = findLaterExtension(s);
     if (later && ctx.allows('data-extension-in-comment')) {
       applyExtension(lifted, later.ext);
-      s = s.slice(0, later.start) + s.slice(later.start + later.ext.length);
+      s = maskRange(s, later.start, later.start + later.ext.length);
     }
   }
-  // A voice frequency at the start, after at most one space or /.
-  let freq = frequencyAt(s);
-  let skip = 0;
-  if (!freq && (s[0] === ' ' || s[0] === '/')) {
-    freq = frequencyAt(s.slice(1));
-    skip = 1;
-  }
+  // A voice frequency at the start of the text left, after at most one space or /.
+  const nextBytes = (k: number): number => {
+    while (isLiftMark(s[k])) k++;
+    return k;
+  };
+  const start = nextBytes(0);
+  let freq = frequencyAt(s, start);
+  if (!freq && (s[start] === ' ' || s[start] === '/')) freq = frequencyAt(s, nextBytes(start + 1));
+  let rest: string;
   if (freq) {
     lifted.frequency = freq.frequency;
-    s = s.slice(skip + freq.length);
+    rest = stripLifts(s.slice(freq.end));
+    // One space after the frequency and its fields is a separator.
+    if (rest[0] === ' ') rest = rest.slice(1);
+  } else {
+    rest = stripLifts(s);
   }
   // One leading delimiter.
-  if (s[0] === ' ' || s[0] === '/') s = s.slice(1);
-  lifted.rest = s;
+  if (rest[0] === ' ' || rest[0] === '/') rest = rest.slice(1);
+  lifted.rest = rest;
   return lifted;
 }
 
@@ -1035,9 +1053,11 @@ function weatherTail(
   if (lifted.telemetry) out.telemetry = lifted.telemetry;
   // Elements lifted out of the comment are met before the text left over is judged.
   liftedDao?.(lifted.dao);
-  let text = lifted.rest;
+  let text = stripLifts(lifted.rest);
   if (text.length === 0) return out;
-  const m = SOFTWARE_UNIT_RE.exec(text);
+  // The software type and unit stand whole in one piece of the text.
+  const pieces = lifted.rest.split(/[\u0100\u0101]+/).filter((p) => p.length > 0);
+  const m = pieces.length === 1 ? SOFTWARE_UNIT_RE.exec(text) : null;
   if (m && !/^[0-9]+$/.test(m[2]!)) {
     w.software = m[1]!;
     w.unit = m[2]!;

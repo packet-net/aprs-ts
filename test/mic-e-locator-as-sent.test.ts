@@ -23,11 +23,19 @@ describe('a locator that reaches the start only once something is lifted is text
   });
 });
 
+describe('a PHG split by an altitude after a locator is text', () => {
+  it('reads no PHG and no late one', () => {
+    const info = '\'IO91/G PH"4e}G3330  ';
+    expect(data(info).phg).toBeUndefined();
+    expect(codes(info)).not.toContain('data-extension-in-comment');
+    expect(data(info).comment).toBe('PHG3330  ');
+  });
+});
+
 describe('a PHG or RNG after a locator only once something is lifted is late', () => {
   it.each([
     "'IO91/G!W12!PHG3330RNG0001",
     "'IO91/G|!:&0'p|RNG0001",
-    '\'IO91/G PH"4e}G3330  ',
     '\'IO91/G !W12!PHG3330',
   ])('%j is read with data-extension-in-comment', (info) => {
     expect(codes(info)).toContain('data-extension-in-comment');

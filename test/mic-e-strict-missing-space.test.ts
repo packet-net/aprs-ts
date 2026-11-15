@@ -22,8 +22,8 @@ describe('strict: the missing space is met before an altitude left across a lift
     expect(strictCode(info)).toBe('missing-space-after-locator');
   });
 
-  it('keeps mic-e-altitude-not-first when the locator has its space', () => {
-    expect(strictCode('`IO91/G x!W12!ab}')).toBe('mic-e-altitude-not-first');
+  it('reads a later altitude as text when the locator has its space', () => {
+    expect(strictCode('`IO91/G x!W12!ab}')).toBeUndefined();
   });
 });
 
@@ -40,10 +40,12 @@ describe('a PHG after a leading altitude and a locator', () => {
   });
 });
 
-describe('a PHG split by a lifted element is late', () => {
+describe('a PHG split by a lifted element is text', () => {
   it.each(['>PH!W12!G3330', ' PH!w3U!G3330'])('%j', (info) => {
     const p = decodeTnc2(tnc(info));
-    expect(p.diagnostics.map((d) => d.code)).toContain('data-extension-in-comment');
+    expect(p.diagnostics.map((d) => d.code)).not.toContain('data-extension-in-comment');
+    expect((p.data as { phg?: unknown; comment?: string }).phg).toBeUndefined();
+    expect((p.data as { comment?: string }).comment).toBe('PHG3330');
     expect((decodeTnc2(tnc(info), ParseOptions.strict).data as { phg?: unknown }).phg).toBeUndefined();
   });
 });

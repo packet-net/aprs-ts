@@ -18,13 +18,16 @@ import {
   decodeAfterPosition,
   extensionAt,
   isDigit,
+  isLiftMark,
   isSymbolTable,
   liftMicEComment,
   liftTelemetryAndDao,
+  maskRange,
   METRES_PER_FOOT,
   parsePosition,
   parsePositionlessWeather,
   positionDecodesAt,
+  stripLifts,
   timestampAt,
   timestampValid,
   type ExtensionFound,
@@ -361,8 +364,8 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
   let sentLocator: RegExpExecArray | null = null;
   // False after a leading altitude: a PHG or RNG is then looked for in the lifted text.
   let extensionLooked = true;
-  // Where a later altitude was taken out of the text: a !DAO! is never read across it.
-  let join: number | undefined;
+  // `text` is a working copy: each element lifted from it leaves lift marks in its place, so no
+  // later element is read across the place one came from.
   const altFirst = /^([!-{]{3})\}/.exec(text);
   if (altFirst) {
     altitudeFeet = (base91Value(altFirst[1]!) - 10000) / METRES_PER_FOOT;
@@ -376,7 +379,7 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
       const at = text[sentLocator[0].length] === ' ' ? sentLocator[0].length + 1 : sentLocator[0].length;
       extension = extensionAt(text, at);
       if (extension) {
-        text = text.slice(0, at) + text.slice(at + extension.length);
+        text = maskRange(text, at, at + extension.length);
         extensionAfterLocator = true;
         if (at === sentLocator[0].length) spacelessExtension = true;
       }
@@ -391,7 +394,7 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     const at = loc ? (text[loc[0].length] === ' ' ? loc[0].length + 1 : loc[0].length) : 0;
     extension = extensionAt(text, at);
     if (extension) {
-      text = text.slice(0, at) + text.slice(at + extension.length);
+      text = maskRange(text, at, at + extension.length);
       extensionAfterLocator = at > 0;
       if (loc && at === loc[0].length) spacelessExtension = true;
     }
@@ -401,74 +404,44 @@ export function decodeMicE(ctx: DecodeContext, s: string): MicEReport {
     const laterRe = /([!-{]{3})\}/g;
     laterRe.lastIndex = locEnd;
     const later = laterRe.exec(text);
+    // A strict decoder declines a later altitude and leaves it as text.
     if (later && ctx.allows('mic-e-altitude-not-first')) {
       altitudeFeet = (base91Value(later[1]!) - 10000) / METRES_PER_FOOT;
-      text = text.slice(0, later.index) + text.slice(later.index + 4);
-      join = later.index;
-    } else if (!ctx.options.tolerates('mic-e-altitude-not-first')) {
-      // A later altitude declined is left as text; lifting telemetry or the !DAO! must then not
-      // join the bytes either side of its place into another one. With no later altitude, strict reads as lenient (vectors
-      // README, Mic-E).
-      // The text left after the locator is judged, never one that uses its bytes; the locator's
-      // space is at the byte after it and an altitude is whole only at its `}`, so a locator
-      // missing its space is met first (vectors interpretations, "A packet is read in order").
-      if (later) {
-        const lifted = liftTelemetryAndDao(text.slice(locEnd));
-        const across = [...lifted.rest.matchAll(/(?=([!-{]{3})\})/g)].some((m) => lifted.cuts.some((c) => c > m.index && c < m.index + 4));
-        if (across) {
-          if (locEnd > 0 && lifted.rest.length > 0 && (spacelessExtension || lifted.rest[0] !== ' ')) {
-            ctx.tolerate('missing-space-after-locator');
-          }
-          ctx.fail('mic-e-altitude-not-first');
-        }
-      }
+      text = maskRange(text, later.index, later.index + 4);
     }
   }
   if (altitudeFeet !== undefined) f.altitudeFeet = altitudeFeet;
   // Base-91 telemetry and the !DAO! are lifted before the locator is read, so a locator followed
   // straight by either has no missing space (vectors rulings, F16).
-  const joins = join !== undefined && join > 0 ? [join] : [];
-  const pre = liftTelemetryAndDao(text, joins);
+  const pre = liftTelemetryAndDao(text);
   text = pre.rest;
-  // A locator is read only at the start of the status text, after any type code or a Mic-E
+  // A locator is read only at the start of the status text as sent, after any type code or a Mic-E
   // altitude there; after a PHG or RNG, say, it is text (vectors rulings, F17).
   let locator: string | undefined;
   let loc = extension && !extensionAfterLocator ? null : sentLocator;
-  // Nothing lifted (a !DAO!, telemetry, an altitude) may stand before or inside the locator: one
-  // that reaches the start only once something is lifted is comment text, judged on the text as sent.
+  // Nothing lifted (a !DAO!, telemetry) may stand before or inside the locator.
   if (loc && pre.removed.some(([a]) => a < loc!.index + loc![0].length)) loc = null;
-  // Taking an element out never joins the text either side of it into a locator.
-  if (loc && join !== undefined) {
-    const at = join - pre.removed.reduce((n, [a, b]) => (b <= join ? n + (b - a) : n), 0);
-    if (at > 0 && at < loc[0].length) loc = null;
-  }
   if (loc) {
     locator = loc[1]!.toUpperCase();
     text = text.slice(loc[0].length);
-    // A PHG or RNG straight after the locator means its space is missing, whatever follows it (a
-    // space after the extension, or an altitude, base-91 telemetry or !DAO! lifted out of the text).
+    // The space is judged on the text left, with the lifted places ignored. A PHG or RNG straight
+    // after the locator means its space is missing, whatever follows it.
+    const left = stripLifts(text);
     if (spacelessExtension) {
       // The extension is already out of the text, so a space now at its start is the comment's
       // own leading delimiter, dropped once with the rest (not the locator's missing space).
       ctx.tolerate('missing-space-after-locator');
-    } else if (text.length > 0) {
-      if (text[0] === ' ') text = text.slice(1);
-      else ctx.tolerate('missing-space-after-locator');
+    } else if (left.length > 0) {
+      if (left[0] === ' ') {
+        let k = 0;
+        while (isLiftMark(text[k])) k++;
+        text = text.slice(0, k) + text.slice(k + 1);
+      } else ctx.tolerate('missing-space-after-locator');
     }
   }
-  // A PHG or RNG is straight after the type code only where it is so as sent: one that reaches
-  // there once a later altitude is lifted is late (vectors mic-e/an-rng-reached-only-by-lifting-an-altitude-is-late).
-  const startJoined = !extension && !loc && join !== undefined && (extensionAt(text, 0)?.length ?? 0) > join;
-  // The same holds when a !DAO! or base-91 telemetry taken out of the start is what brings it there
-  // (vectors mic-e/phg-reached-only-by-lifting-a-dao-is-late).
-  // So is one that a lifted element splits (`PH!w3U!G3330`).
-  const startLifted =
-    !extension &&
-    !loc &&
-    (pre.removed.some(([a]) => a === 0) || pre.cuts.some((c) => c > 0 && c < (extensionAt(text, 0)?.length ?? 0)));
-  // After a locator, a PHG or RNG not there as sent (found only once something is lifted) is late too.
+  // After a locator, a PHG or RNG not there as sent (found only once something is lifted) is late.
   const afterLocatorLate = !!loc && !extension && extensionLooked;
-  const { lifted } = liftMicEComment(ctx, text, pos.symbol, extension, pre, !startJoined && !startLifted && !afterLocatorLate);
+  const { lifted } = liftMicEComment(ctx, text, pos.symbol, extension, pre, !afterLocatorLate);
   // The !DAO! is structure, so it is judged before the text's encoding.
   applyDao(ctx, f, pos, lifted.dao);
   applyLiftedTo(ctx, f, lifted);
