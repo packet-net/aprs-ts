@@ -282,8 +282,15 @@ export function frequencyText(f: VoiceFrequency): string {
     flag('missing-field', 'narrow modulation is written with the tone');
   }
   if (f.offsetKhz !== undefined) {
-    if (f.offsetKhz % 10 !== 0) flag('value-has-no-form', 'the offset is in tens of kHz');
-    const v = exact(Math.abs(f.offsetKhz) / 10, 0, 999, 'offset');
+    // Out of range (or a fraction, never rounded) comes before the step: a whole-kHz offset that is
+    // in range and not a multiple of 10 has no form.
+    const inRange = Number.isFinite(f.offsetKhz) && Math.abs(f.offsetKhz) <= 9990;
+    const wholeKhz = Number.isInteger(f.offsetKhz);
+    let v = 0;
+    if (wholeKhz && f.offsetKhz % 10 !== 0) {
+      if (inRange) flag('value-has-no-form', 'the offset is in tens of kHz');
+      else flag('value-out-of-range', 'the offset is out of range (0-999 tens of kHz)');
+    } else v = exact(Math.abs(f.offsetKhz) / 10, 0, 999, 'offset');
     out += ` ${f.offsetKhz < 0 ? '-' : '+'}${pad(v, 3)}`;
   }
   if (f.range !== undefined) {

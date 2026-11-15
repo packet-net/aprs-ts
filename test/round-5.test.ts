@@ -434,3 +434,12 @@ describe('a record with thousands of faults costs no more than one with none', (
     expect(best(bad)).toBeLessThan(best(good) * 3 + 20);
   });
 });
+
+describe('a voice offset', () => {
+  const at2 = (offsetKhz: number): AprsData => ({ type: 'position', latitude: 51.5, longitude: -0.1, symbol: { table: '/', code: '>' }, frequency: { mhz: 146.52, offsetKhz } }) as AprsData;
+  it('that is whole kHz and not a multiple of 10 has no form; a fraction is out of range, never rounded', () => {
+    expect(code(() => encodeInformation(at2(605)))).toBe('value-has-no-form');
+    expect(code(() => encodeInformation(at2(60.5)))).toBe('value-out-of-range');
+    expect(code(() => encodeInformation(at2(600)))).toBe('written');
+  });
+});
