@@ -557,3 +557,15 @@ describe('an information field is read back under the header written with it', (
     expect(code(() => encodeInformation(thirdParty(inner('APRS'))))).toBe('not-encodable');
   });
 });
+
+describe('a held Mic-E report written under another Mic-E destination', () => {
+  const held = decodeTnc2('N0CALL>S32U6T:`(_fn"Oj/');
+
+  it('is refused not-encodable under a destination that changes its latitude digits or its SSID, and written under its own', () => {
+    expect(packetToTnc2(held)).toBe('N0CALL>S32U6T:`(_fn"Oj/');
+    expect(code(() => packetToTnc2({ ...held, destination: 'S32U7T' }))).toBe('not-encodable');
+    expect(code(() => packetToAx25({ ...held, destination: 'S32U7T' }))).toBe('not-encodable');
+    expect(code(() => packetToTnc2({ ...held, destination: 'S32U6T-3' }))).toBe('not-encodable');
+    expect(code(() => packetToTnc2({ ...held, destination: 'S32U6T-0' }))).toBe('written');
+  });
+});

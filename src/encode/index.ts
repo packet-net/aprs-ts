@@ -32,8 +32,7 @@ import {
   encodeUserDefined,
 } from './other.js';
 import { decodeInformation } from '../decode/index.js';
-import { toNeutralData } from '../neutral.js';
-import { readBack } from './readback.js';
+import { readBack, sameData } from './readback.js';
 import { checkShape, guarded, pendingShapeFaults, strayFields } from './shape.js';
 import { encodeItem, encodeMicE, encodeObject, micEAltitudeHasNextForm, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
 
@@ -206,7 +205,7 @@ function attemptOnce(data: AprsData, mode: CommentMode, options: WriteOptions, a
  */
 export function readsAsHeld(information: Uint8Array, destination: string, data: AprsData): boolean {
   const read = decodeInformation(information, destination, ParseOptions.lenient).data;
-  return JSON.stringify(toNeutralData(read)) === JSON.stringify(toNeutralData(data));
+  return read.type === data.type && sameData(data, read);
 }
 
 /** Refuses (`not-encodable`) a held information field that reads as other data under the destination it is written with. */

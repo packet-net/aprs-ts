@@ -331,3 +331,12 @@ export function readBack(data: AprsData, binary: string, destination: string | u
   problems.push(...(data.type === 'nmea' ? found.map((p) => problem('invalid-nmea', p.text)) : found));
   return problems;
 }
+
+/**
+ * Whether data read from bytes is the data held, by the read-back's own comparison and its
+ * allowances (a number its form holds in steps is the value rounded once), a third-party inner
+ * packet's info diagnostics left out. Used where the held bytes are read under another header.
+ */
+export function sameData(held: AprsData, read: AprsData): boolean {
+  return compareData(withoutInnerInfo(toNeutralData(held)), withoutInnerInfo(toNeutralData(read)), read).length === 0;
+}

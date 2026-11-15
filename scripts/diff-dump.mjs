@@ -336,7 +336,7 @@ function dropEmptyStrings(root) {
     } else if (x && typeof x === 'object') {
       for (const k of Object.keys(x)) {
         const v = x[k];
-        if (v === null || v === false || (v === '' && k !== 'reply_ack' && !((k === 'source' || k === 'destination') && 'data' in x))) delete x[k];
+        if (v === null || v === false || (k === 'destination_ssid' && v === 0) || (v === '' && k !== 'reply_ack' && !((k === 'source' || k === 'destination') && 'data' in x))) delete x[k];
         else if (v && typeof v === 'object') stack.push(v);
       }
     }
