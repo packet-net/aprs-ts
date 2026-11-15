@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+A Mic-E locator is read only where it stands as sent (at the start of the status text, after any type code, or straight after a leading altitude): one that reaches the start only once a `!DAO!`, telemetry or a later altitude before it is lifted is comment text, and a PHG or RNG after a locator that is there only once something between them is lifted is late (`data-extension-in-comment`). Vectors pinned at 6a47e5ea8d8dc6e5e20e35dc3c39015366047c22 (aprs-vectors, branch `round-5`); eight cases.
+
 A `/` or `@` report whose timestamp is not valid but whose seventh byte is `z`, `/` or `h` and is followed by an uncompressed position (`@R30549z2831.07N/08142.92W_...`) is now read after the seven bytes, with `malformed-timestamp`, instead of reading the garbled bytes as a compressed position. A compressed position after the seven bytes does not take part, and every other report decodes as before. Vectors pinned at 0253b516e7d761f8bd7a62ecbcb0c901a75f713a (aprs-vectors, branch `round-5`). The vectors runner's single-tolerance check has its exact form: when strict is rejected by a different code than the one tolerance, turning that one off must give a reading whose diagnostics include the other code as a warning (`mic-e/telemetry-left-once-an-altitude-is-lifted-then-a-spaced-comment`, whose other checks already passed). No case is skipped, and the runner asserts the check ran on every case whose lenient diagnostics name exactly one tolerable code (731 cases). The Mic-E locator's space is judged on the decoder's own result, as before; unit tests now pin the seven cases' shapes.
 
 ## 1.2.0 (2026-11-14)
