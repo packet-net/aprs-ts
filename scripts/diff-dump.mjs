@@ -12,7 +12,8 @@
 // where R is {"header", "data", "diagnostics"} in the neutral form, or {"header_error": [...]};
 // written is the information field the encoder wrote (whenever it wrote one), written_destination
 // the Mic-E destination it computed, reencode_refusal the refusal code when reencode is refused,
-// and api the API view of the lenient packet (with ax25_refusal beside ax25 "refused").
+// and api the API view of the lenient packet (with tnc2_refusal beside tnc2 "refused", and ax25_refusal
+// beside ax25 "refused").
 //
 // encode: {"n", "data", "exact"} per line, data in the neutral form; writes
 //   {"n", "result": "written|refused|unsupported", "info", "destination", "again", "reason", "refusal"}
@@ -241,7 +242,13 @@ function apiView(packet) {
   }
   api.has_errors = hasErrors(packet);
   api.has_warnings = hasWarnings(packet);
-  api.tnc2 = bytesToHex(packetToTnc2Bytes(packet));
+  try {
+    api.tnc2 = bytesToHex(packetToTnc2Bytes(packet));
+  } catch (e) {
+    if (!(e instanceof AprsEncodeError)) throw e;
+    api.tnc2 = 'refused';
+    api.tnc2_refusal = e.code;
+  }
   try {
     api.ax25 = bytesToHex(packetToAx25(packet));
   } catch (e) {
@@ -317,7 +324,8 @@ function lostKeys(a, b, out) {
 /**
  * Leaves out what the data form leaves out: an empty string value is absent (vectors README, data
  * form), except `reply_ack`, and an inner packet's `source` and `destination`, which are always
- * written. Done in place with a stack, as the data can be nested thousands deep.
+ * written, and so is a `null` or `false` value of an object (a list item is a value and stays).
+ * Done in place with a stack, as the data can be nested thousands deep.
  */
 function dropEmptyStrings(root) {
   const stack = [root];
@@ -328,7 +336,7 @@ function dropEmptyStrings(root) {
     } else if (x && typeof x === 'object') {
       for (const k of Object.keys(x)) {
         const v = x[k];
-        if (v === '' && k !== 'reply_ack' && !((k === 'source' || k === 'destination') && 'data' in x)) delete x[k];
+        if (v === null || v === false || (v === '' && k !== 'reply_ack' && !((k === 'source' || k === 'destination') && 'data' in x))) delete x[k];
         else if (v && typeof v === 'object') stack.push(v);
       }
     }

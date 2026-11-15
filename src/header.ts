@@ -114,14 +114,16 @@ export function parseHeaderText(
 }
 
 /**
- * Reads a header as written (`SOURCE>DEST,PATH`, no colon) back, as a line carrying it would be
- * read, with a third-party source allowed; `undefined` if it is unusable or would end at a colon.
+ * Reads a header as written (`SOURCE>DEST,PATH`, no colon) back, as a user's decode of a line
+ * carrying it reads it: the outer header rules, whatever the packet's origin, so a third-party
+ * packet's inner source `a b` is not an address here. `undefined` if it is unusable or would end at
+ * a colon.
  */
 export function readHeaderText(header: string, options: ParseOptions): { source: string; destination: string; path: PathEntry[]; diagnostics: Diagnostic[] } | undefined {
   if (header.includes(':')) return undefined;
   const diags: Diagnostic[] = [];
   try {
-    return { ...parseHeaderText(header, options, diags, true), diagnostics: diags };
+    return { ...parseHeaderText(header, options, diags), diagnostics: diags };
   } catch (e) {
     if (e instanceof HeaderRejected) return undefined;
     throw e;
@@ -136,7 +138,7 @@ function markUsed(raw: readonly { address: string; marked: boolean }[]): PathEnt
   return raw.map((e, i) => ({ address: e.address, used: i <= last }));
 }
 
-/** Formats a path as TNC2 text: only the last used entry is marked with `*`. */
+/** Formats a path as TNC2 text: only the last used entry is marked with `*`. Display only, as `formatTnc2Header`: nothing is checked. */
 export function formatPath(path: readonly PathEntry[]): string {
   let last = -1;
   path.forEach((e, i) => {
@@ -145,7 +147,13 @@ export function formatPath(path: readonly PathEntry[]): string {
   return path.map((e, i) => (i === last ? `${e.address}*` : e.address)).join(',');
 }
 
-/** Formats a header as TNC2 text, without the colon. */
+/**
+ * Formats a header as TNC2 text, without the colon (`*` on the last used entry only). This is for
+ * display and for building text, not a writer: it checks nothing and never refuses, so what it
+ * gives may be a header no decoder reads back (an address APRS-IS does not allow, a path entry not
+ * marked used before one that is). To write a line to send, use `encodeTnc2`, `packetToTnc2` or a
+ * built packet's `toTnc2`, which judge the header and read it back.
+ */
 export function formatTnc2Header(source: string, destination: string, path: readonly PathEntry[]): string {
   return path.length === 0 ? `${source}>${destination}` : `${source}>${destination},${formatPath(path)}`;
 }

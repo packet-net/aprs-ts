@@ -13,8 +13,8 @@
 // `build()` encodes the packet, so anything the spec does not allow is refused there, with an
 // `AprsEncodeError` that says why.
 
-import { AprsEncodeError, DEFAULT_DESTINATION, firstRefusal, markEmptyMessageId, markGivenTwice, markMicEAltitudeBytesOnly, nearest, numberFault, refuse } from './encode/common.js';
-import { ax25Of, checkHeaderAddresses, encodeInformation, passedReadBack, tnc2BytesOf, tnc2TextOf, wrapKiss } from './encode/index.js';
+import { AprsEncodeError, DEFAULT_DESTINATION, firstRefusal, markEmptyMessageId, markGivenTwice, nearest, numberFault, refuse } from './encode/common.js';
+import { ax25Of, checkHeaderAddresses, encodeInformationWith, tnc2BytesOf, tnc2TextOf, wrapKiss, type WriteOptions } from './encode/index.js';
 import { symbolOf } from './symbols.js';
 import type {
   AprsData,
@@ -40,15 +40,31 @@ export interface BuiltPacket {
   readonly destination: string;
   readonly path: readonly PathEntry[];
   readonly data: AprsData;
-  /** The information field bytes. */
+  /** A copy of the information field bytes: changing it changes nothing the packet writes. */
   readonly information: Uint8Array;
-  /** The TNC2 / APRS-IS line. */
+  /**
+   * The TNC2 / APRS-IS line.
+   *
+   * @throws AprsEncodeError (`tnc2-cannot-carry`) when a line cannot carry the packet: the header reads back as another, or the information field holds a CR or LF before its end.
+   */
   toTnc2(): string;
-  /** The TNC2 / APRS-IS line as bytes. */
+  /**
+   * The TNC2 / APRS-IS line as bytes.
+   *
+   * @throws AprsEncodeError (`tnc2-cannot-carry`) as `toTnc2` does.
+   */
   toTnc2Bytes(): Uint8Array;
-  /** The AX.25 UI frame (no flags, no FCS). */
+  /**
+   * The AX.25 UI frame (no flags, no FCS).
+   *
+   * @throws AprsEncodeError (`ax25-cannot-carry`) when a frame cannot carry the header: a call over six characters or in lower case, an SSID over 15, or more than 8 path entries.
+   */
   toAx25(): Uint8Array;
-  /** The AX.25 frame wrapped for a KISS TNC. */
+  /**
+   * The AX.25 frame wrapped for a KISS TNC.
+   *
+   * @throws AprsEncodeError (`ax25-cannot-carry`) as `toAx25` does; RangeError unless `port` is an integer 0-15.
+   */
   toKiss(port?: number): Uint8Array;
 }
 
@@ -64,27 +80,31 @@ function pathEntryOf(entry: string | PathEntry): PathEntry {
 }
 
 /**
- * Encodes the data and checks the header's addresses, so a `BuiltPacket` can always be written.
- * An address APRS-IS does not allow is refused first, then the data; a header a form cannot carry
- * (a path entry not marked used before a used one, a call a frame cannot carry) is refused only
- * by the call that writes that form. A Mic-E destination is computed, and always a valid address.
+ * Judges the header given, encodes the data and keeps the information field, so a `BuiltPacket`
+ * can be written. An address APRS-IS does not allow (`invalid-address`) and a path whose entry not
+ * marked used comes before a used one (`invalid-path`) are refused first, whatever form is written,
+ * then the data; a header only one form cannot carry (a call a frame cannot carry) is refused by the
+ * call that writes that form. A Mic-E destination is computed, and always a valid address. A Mic-E
+ * altitude goes in the Mic-E bytes first, asked of the encoder as an argument: the data holds the
+ * value as given.
  */
 function built(header: Header, makeData: () => AprsData, micE = false): BuiltPacket {
-  const path = header.path.map((e) => Object.freeze({ ...e }));
+  const path = header.path.map((e) => Object.freeze({ address: e.address, used: Boolean(e.used) }));
   const given = micE ? DEFAULT_DESTINATION : (header.destination ?? DEFAULT_DESTINATION);
   checkHeaderAddresses(header.source, given, path);
   const data = makeData();
-  const encoded = passedReadBack(encodeChecked(data));
+  const encoded = encodeChecked(data, micE ? { micEBytesFirst: true } : {});
   const destination = encoded.destination ?? header.destination ?? DEFAULT_DESTINATION;
   checkHeaderAddresses(header.source, destination, path);
-  const information = encoded.information;
+  // The writers use this copy, which nothing outside can reach; the packet gives out another.
+  const information = new Uint8Array(encoded.information);
   const frame = (): Uint8Array => ax25Of(header.source, destination, path, information);
   return Object.freeze({
     source: header.source,
     destination,
     path: Object.freeze(path),
     data,
-    information,
+    information: new Uint8Array(information),
     toTnc2: () => tnc2TextOf(tnc2BytesOf(header.source, destination, path, information)),
     toTnc2Bytes: () => tnc2BytesOf(header.source, destination, path, information),
     toAx25: frame,
@@ -145,14 +165,14 @@ const aprsUnits = new WeakMap<object, Weather>();
  * checked on its own, so the refusal is the first code in the order among both encodings and
  * `value-given-twice` (vectors README, Builder rules). Other data is encoded as it is.
  */
-function encodeChecked(data: AprsData): ReturnType<typeof encodeInformation> {
+function encodeChecked(data: AprsData, options: WriteOptions): ReturnType<typeof encodeInformationWith> {
   const weather = (data as { weather?: object }).weather;
   const other = weather === undefined ? undefined : aprsUnits.get(weather);
-  if (other === undefined) return encodeInformation(data);
+  if (other === undefined) return encodeInformationWith(data, options);
   const faults: AprsEncodeError[] = [];
   for (const d of [data, { ...data, weather: other } as AprsData]) {
     try {
-      encodeInformation(d);
+      encodeInformationWith(d, options);
     } catch (e) {
       if (!(e instanceof AprsEncodeError)) throw e;
       faults.push(e);
@@ -661,13 +681,8 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
         const data: Mutable<Extract<AprsData, { type: 'mic-e' }>> = { type: 'mic-e', micEMessage: this.messageValue, ...this.fields };
         // A course of 0 (after rounding) is unknown, which Mic-E writes as 0: no course (B1).
         if (data.courseDegrees !== undefined && Number.isFinite(data.courseDegrees) && nearest(data.courseDegrees) === 0) delete data.courseDegrees;
-        // An altitude in either unit goes in the Mic-E altitude bytes, rounded once to the metre from
-        // the value given; the next form is a /A=, only if it holds the value given exactly, else it is refused.
-        if (data.altitudeFeet !== undefined && Number.isFinite(data.altitudeFeet)) {
-        const given = data.altitudeFeet;
-        data.altitudeFeet = nearest(given * 0.3048) / 0.3048;
-        markMicEAltitudeBytesOnly(data, given);
-        }
+        // An altitude in either unit stays as given: the encoder writes it in the Mic-E altitude bytes
+        // first (rounded once to the metre), then, only if a /A= holds the value given exactly, in one.
         if (this.typeCodeValue !== undefined) data.typeCode = this.typeCodeValue;
         if (this.deviceSuffixValue !== undefined) data.deviceSuffix = this.deviceSuffixValue;
         if (this.locatorValue !== undefined) data.locator = this.locatorValue;

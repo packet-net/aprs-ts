@@ -22,7 +22,10 @@ export function hasWarnings(packet: AprsPacket): boolean {
  * field over 256 bytes is written as it came), but the header written is read back like any
  * other.
  *
- * @throws AprsEncodeError (`tnc2-cannot-carry`) when the header reads back as another one.
+ * @throws AprsEncodeError: `invalid-address` or `invalid-path` for a header no form can carry (a
+ * packet read from inside a third-party packet is held to the outer address rule, so an inner
+ * source such as `a b` is refused), and `tnc2-cannot-carry` when the header reads back as another
+ * one or the information field holds a CR or LF before its end (a line ends there).
  */
 export function packetToTnc2Bytes(packet: AprsPacket): Uint8Array {
   return guarded(() => tnc2BytesOf(packet.source, packet.destination, packet.path, packet.information));
@@ -31,7 +34,8 @@ export function packetToTnc2Bytes(packet: AprsPacket): Uint8Array {
 /**
  * A received packet as a TNC2 / APRS-IS line of text.
  *
- * @throws AprsEncodeError when the information field is not UTF-8 text; use `packetToTnc2Bytes`.
+ * @throws AprsEncodeError as `packetToTnc2Bytes` does, and `tnc2-cannot-carry` when the information
+ * field is not UTF-8 text; use `packetToTnc2Bytes` for that.
  */
 export function packetToTnc2(packet: AprsPacket): string {
   return tnc2TextOf(packetToTnc2Bytes(packet));
@@ -41,8 +45,10 @@ export function packetToTnc2(packet: AprsPacket): string {
  * A received packet as an AX.25 UI frame (no flags, no FCS), the information field as received.
  * Not an encoder: the field is passed through as it stands, with no size check.
  *
- * @throws AprsEncodeError when AX.25 cannot carry an address as sent (a call over six characters,
- * an SSID written with a leading zero, an SSID over 15) or the path has more than 8 entries.
+ * @throws AprsEncodeError: `invalid-address` or `invalid-path` as `packetToTnc2Bytes` does, and
+ * `ax25-cannot-carry` when AX.25 cannot carry an address as sent (a call over six characters, in
+ * lower case or empty, an empty destination included; an SSID written with a leading zero or over 15)
+ * or the path has more than 8 entries. A CR or LF in the information field is carried.
  */
 export function packetToAx25(packet: AprsPacket): Uint8Array {
   return guarded(() => ax25Of(packet.source, packet.destination, packet.path, packet.information));

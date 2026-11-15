@@ -174,9 +174,15 @@ function buildCheck(c: Case): string[] {
 }
 
 /** A decode case's `pass_through`: the lenient packet written back as held, with this library's pass-through writers. */
-function passThroughCheck(c: Case, lenient: Result): string[] {
+function passThroughCheck(c: Case, lenient: Result, inner = false): string[] {
   if ('header_error' in lenient) return ['the lenient decoder rejected the header'];
-  const want = c.pass_through as { tnc2?: string; tnc2_refusal?: string; ax25_hex?: string; ax25_refusal?: string };
+  const want = (inner ? c.pass_through_inner : c.pass_through) as { tnc2?: string; tnc2_refusal?: string; ax25_hex?: string; ax25_refusal?: string };
+  // `pass_through_inner`: the inner packet of a third-party packet, taken out and written on its own.
+  let held = lenient.packet;
+  if (inner) {
+    if (lenient.packet.data.type !== 'third-party') return ['the case has pass_through_inner but the packet is not third-party'];
+    held = lenient.packet.data.packet;
+  }
   const problems: string[] = [];
   const run = (what: string, write: () => string, text: string | undefined, refusal: string | undefined): void => {
     if (text === undefined && refusal === undefined) return;
@@ -190,8 +196,8 @@ function passThroughCheck(c: Case, lenient: Result): string[] {
       else if (refusal !== e.code) problems.push(`${what}: refused with ${e.code} (${e.message}), want ${refusal}`);
     }
   };
-  run('tnc2', () => packetToTnc2(lenient.packet), want.tnc2, want.tnc2_refusal);
-  run('ax25', () => hex(packetToAx25(lenient.packet)).toUpperCase(), want.ax25_hex?.toUpperCase(), want.ax25_refusal);
+  run('tnc2', () => packetToTnc2(held), want.tnc2, want.tnc2_refusal);
+  run('ax25', () => hex(packetToAx25(held)).toUpperCase(), want.ax25_hex?.toUpperCase(), want.ax25_refusal);
   return problems;
 }
 
@@ -246,6 +252,9 @@ for (const { file, cases } of loadCases()) {
       }
       if (c.pass_through !== undefined) {
         check(c.id, 'pass-through', () => fail(passThroughCheck(c, decode(input, ParseOptions.lenient))));
+      }
+      if (c.pass_through_inner !== undefined) {
+        check(c.id, 'pass-through-inner', () => fail(passThroughCheck(c, decode(input, ParseOptions.lenient), true)));
       }
       if (c.reencode !== undefined) {
         check(c.id, 'reencode', () => fail(reencodeCheck(c, decode(input, ParseOptions.lenient))));

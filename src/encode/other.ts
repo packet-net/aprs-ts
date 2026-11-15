@@ -29,7 +29,7 @@ import type {
   ThirdParty,
   UserDefined,
 } from '../types.js';
-import { checkSymbol, freeText, isValidTimestamp, numberText, pad, flag, numberFault, whole } from './common.js';
+import { checkSymbol, freeText, isValidTimestamp, numberText, pad, flag, numberFault, whole, exact } from './common.js';
 
 const MESSAGE_ID = /^[A-Za-z0-9]{1,5}$/;
 const REPLY_ACK = /^[A-Za-z0-9]{0,5}$/;
@@ -279,7 +279,7 @@ export function encodeTest(d: TestData): string {
 }
 
 export function encodeAgrelo(d: AgreloDf): string {
-  return `%${pad(whole(d.bearingDegrees, 0, 360, 'bearing'), 3)}/${whole(d.quality, 0, 9, 'quality')}`;
+  return `%${pad(whole(d.bearingDegrees, 0, 360, 'bearing'), 3)}/${exact(d.quality, 0, 9, 'quality')}`;
 }
 
 /** Checks a third-party packet's inner header, which is written before the inner data. */

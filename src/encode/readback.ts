@@ -27,8 +27,19 @@ function problem(code: RefusalCode, text: string): Problem {
   return { code, text };
 }
 
-/** The infos a decode may carry and still match: each attached by the rules to a form the data asks for. */
-const ALLOWED_INFOS: ReadonlySet<string> = new Set(['obsolete-format', 'mic-e-missing-device-type', 'invalid-query', 'invalid-telemetry-metadata']);
+/**
+ * The infos a decode may carry and still match, each only on the form the rules attach it to:
+ * `obsolete-format` on a positionless weather report, raw weather, raw NMEA, a Maidenhead beacon and
+ * Mic-E Rev 0 telemetry; `mic-e-missing-device-type` on Mic-E status text with no type code;
+ * `invalid-query` and `invalid-telemetry-metadata` on a message the rules read as a plain message.
+ * Any other info, or one of these on another form, is a change.
+ */
+const ALLOWED_INFOS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['obsolete-format', new Set(['weather', 'raw-weather', 'nmea', 'maidenhead-beacon', 'mic-e'])],
+  ['mic-e-missing-device-type', new Set(['mic-e'])],
+  ['invalid-query', new Set(['message'])],
+  ['invalid-telemetry-metadata', new Set(['message'])],
+]);
 
 /** Fields that hold free text; one that reads back changed or lost is text that read as something else. */
 const FREE_TEXT_FIELDS: ReadonlySet<string> = new Set(['comment', 'text', 'data', 'project', 'software', 'unit', 'names', 'units', 'extra', 'status']);
@@ -129,38 +140,56 @@ function weatherValue(key: string, v: number, level: N): number {
   }
 }
 
-/** What a number given reads back as, by the form the decode shows was written. `path` is relative to the level. */
-function roundedValue(path: readonly string[], v: number, level: N, levelData: AprsData | undefined): number {
+/** What a number reads back as: the value, and whether it is compared within 1e-9 (a number with no step) or exactly (an integer or a code). */
+interface ReadsBack {
+  readonly value: number;
+  readonly within: boolean;
+}
+
+const exactly = (v: number): ReadsBack => ({ value: v, within: false });
+const asGiven = (v: number): ReadsBack => ({ value: v, within: true });
+const rounded = (v: number): ReadsBack => ({ value: v, within: true });
+
+/**
+ * What a number given reads back as, by the form the decode shows was written. `path` is relative to
+ * the level. Only the step fields the Encoding rule lists are rounded; a number without steps is
+ * compared within 1e-9, and every other number, a whole-unit or code field, exactly as it was given.
+ */
+function readsBackAs(path: readonly string[], v: number, level: N, levelData: AprsData | undefined): ReadsBack {
   const type = level.type;
   // Numbers without steps: compared as they are.
-  if (type === 'nmea' || type === 'telemetry' || type === 'telemetry-coefficients') return v;
-  if (type === 'query') return path[0] === 'footprint' && path[1] !== 'radius_miles' ? v : nearest(v);
+  if (type === 'nmea' || type === 'telemetry' || type === 'telemetry-coefficients') return asGiven(v);
+  if (type === 'agrelo-df') return path[0] === 'bearing_degrees' ? rounded(nearest(v)) : exactly(v);
+  if (type === 'query') {
+    if (path[0] !== 'footprint') return exactly(v);
+    return path[1] === 'radius_miles' ? rounded(nearest(v)) : asGiven(v);
+  }
   const positioned = type === 'position' || type === 'object' || type === 'item' || type === 'mic-e';
   if (positioned && path.length === 1) {
     switch (path[0]) {
       case 'latitude':
-        return coordinate(v, level, true);
+        return rounded(coordinate(v, level, true));
       case 'longitude':
-        return coordinate(v, level, false);
+        return rounded(coordinate(v, level, false));
       case 'course_degrees':
         // In the cs bytes: 4-degree steps, and north reads back as 360.
-        return level.compressed === true ? ((nearest(v / 4) % 90) * 4 || 360) : nearest(v);
+        return rounded(level.compressed === true ? ((nearest(v / 4) % 90) * 4 || 360) : nearest(v));
       case 'speed_knots':
-        return level.compressed === true ? Math.pow(1.08, nearest(Math.log(v + 1) / Math.log(1.08))) - 1 : nearest(v);
+        return rounded(level.compressed === true ? Math.pow(1.08, nearest(Math.log(v + 1) / Math.log(1.08))) - 1 : nearest(v));
       case 'altitude_feet':
-        return altitude(v, level, levelData);
+        return rounded(altitude(v, level, levelData));
       case 'range_miles':
-        return level.compressed === true ? 2 * Math.pow(1.08, nearest(Math.log(v / 2) / Math.log(1.08))) : nearest(v);
+        return rounded(level.compressed === true ? 2 * Math.pow(1.08, nearest(Math.log(v / 2) / Math.log(1.08))) : nearest(v));
       default:
-        return nearest(v);
+        return exactly(v);
     }
   }
-  if ((positioned || type === 'weather') && path[0] === 'weather' && path.length === 2) return weatherValue(path[1]!, v, level);
+  if ((positioned || type === 'weather') && path[0] === 'weather' && path.length === 2) return rounded(weatherValue(path[1]!, v, level));
   if (positioned && path[0] === 'frequency' && path[1] === 'mhz') {
     const resolution = (level.frequency as { ten_khz_resolution?: boolean } | undefined)?.ten_khz_resolution ? 100 : 1000;
-    return nearest(v * resolution) / resolution;
+    return rounded(nearest(v * resolution) / resolution);
   }
-  return nearest(v);
+  return exactly(v);
 }
 
 // ---- the comparison
@@ -182,9 +211,14 @@ function isObject(v: unknown): v is N {
 function walk(want: unknown, got: unknown, path: string[], level: Level, out: Problem[]): void {
   const name = (extra?: string): string => level.prefix + [...path, ...(extra === undefined ? [] : [extra])].join('.') || 'the data';
   if (typeof want === 'number' && typeof got === 'number') {
-    const expected = roundedValue(path, want, level.got, level.data);
-    if (!sameNumber(expected, got)) {
-      out.push(problem(level.got.type === 'nmea' ? 'invalid-nmea' : 'does-not-read-back', `${name()} would read back as ${got}, not ${expected}`));
+    // A number that is not a number is refused wherever it is, never compared as absent.
+    if (!Number.isFinite(want)) {
+      out.push(problem('not-a-number', `${name()} is not a number`));
+      return;
+    }
+    const expected = readsBackAs(path, want, level.got, level.data);
+    if (!(expected.within ? sameNumber(expected.value, got) : expected.value === got)) {
+      out.push(problem(level.got.type === 'nmea' ? 'invalid-nmea' : 'does-not-read-back', `${name()} would read back as ${got}, not ${expected.value}`));
     }
     return;
   }
@@ -195,7 +229,9 @@ function walk(want: unknown, got: unknown, path: string[], level: Level, out: Pr
   }
   if (isObject(want) && isObject(got)) {
     for (const k of new Set([...Object.keys(want), ...Object.keys(got)])) {
-      if (!(k in want)) {
+      if (k === 'diagnostics' && path.length === 1 && path[0] === 'packet') {
+        innerDiagnostics(want[k], got[k], name(k), out);
+      } else if (!(k in want)) {
         if (valueTheFormMustCarry(k, want, got, path, level)) continue;
         out.push(problem('text-reads-as-field', `${name(k)} would appear`));
       } else if (!(k in got)) {
@@ -211,6 +247,21 @@ function walk(want: unknown, got: unknown, path: string[], level: Level, out: Pr
     return;
   }
   if (want !== got) out.push(problem('text-reads-as-field', `${name()} would read back as ${JSON.stringify(got)}, not ${JSON.stringify(want)}`));
+}
+
+/**
+ * A third-party packet's inner warnings and errors are data, compared as a multiset: one the data
+ * gives and the bytes do not read back with has no form (`value-has-no-form`), one the bytes read
+ * back with and the data does not give is text that reads as something else.
+ */
+function innerDiagnostics(want: unknown, got: unknown, name: string, out: Problem[]): void {
+  const left = Array.isArray(got) ? [...(got as string[])] : [];
+  for (const d of Array.isArray(want) ? (want as string[]) : []) {
+    const i = left.indexOf(d);
+    if (i >= 0) left.splice(i, 1);
+    else out.push(problem('value-has-no-form', `${name} gives ${d}, which the written bytes would not read back with`));
+  }
+  for (const d of left) out.push(problem('text-reads-as-field', `${name} would read back with ${d}, which the data does not give`));
 }
 
 /** Allowance (2): a value the form must carry where the data leaves it out. Only at the top of a level. */
@@ -255,9 +306,10 @@ function withoutInnerInfo(n: Neutral): Neutral {
   return { ...n, packet: copy };
 }
 
-function diagnosticProblems(diagnostics: readonly Diagnostic[]): Problem[] {
+/** What a decode's diagnostics count against the bytes: any warning or error, and an info not listed for the form decoded (`type`). */
+export function diagnosticProblems(diagnostics: readonly Diagnostic[], type: string): Problem[] {
   return diagnostics
-    .filter((d) => d.severity !== 'info' || !ALLOWED_INFOS.has(d.code))
+    .filter((d) => d.severity !== 'info' || !ALLOWED_INFOS.get(d.code)?.has(type))
     .map((d) => problem('text-reads-as-field', `it would read back with ${formatDiagnostic(d)}`));
 }
 
@@ -267,7 +319,7 @@ function diagnosticProblems(diagnostics: readonly Diagnostic[]): Problem[] {
  */
 export function readBack(data: AprsData, binary: string, destination: string | undefined): Problem[] {
   const decoded = decodeInformation(binaryToBytes(binary), destination ?? DEFAULT_DESTINATION, ParseOptions.lenient);
-  const problems = diagnosticProblems(decoded.diagnostics);
+  const problems = diagnosticProblems(decoded.diagnostics, decoded.data.type);
   if (decoded.data.type !== data.type) {
     problems.push(problem('text-reads-as-field', `it would read back as ${decoded.data.type}`));
     return problems;

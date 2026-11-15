@@ -227,6 +227,7 @@ export const DIAGNOSTIC_CODES: readonly DiagnosticCode[] = Object.keys(DIAGNOSTI
 /** Every reason the encoder or builder refuses (the vectors' codes.json `refusals`). New codes may be added in later 1.x releases, so allow an unknown one. */
 export type RefusalCode =
   | 'invalid-address'
+  | 'invalid-path'
   | 'ax25-cannot-carry'
   | 'tnc2-cannot-carry'
   | 'invalid-third-party-header'
@@ -257,21 +258,22 @@ export type RefusalCode =
 /** What each refusal code means. */
 export const REFUSAL_MEANINGS: Readonly<Record<RefusalCode, string>> = {
   'invalid-address': "A header address (source, destination, path entry, or a third-party one) is not 1-9 letters, digits or `-` in TNC2 text.",
-  'ax25-cannot-carry': "An AX.25 frame cannot carry the header: a call over 6 characters or in lower case, an SSID over 15 or written with a leading zero or as -0, more than 8 path entries, a path entry not marked used before one that is (it reads back used).",
-  'tnc2-cannot-carry': "A TNC2 line cannot carry the packet: its information field is not UTF-8 text, or its path has an entry not marked used before one that is, which reads back used.",
+  'invalid-path': "A path given to be written has an entry not marked used before one that is: no TNC2 line or AX.25 frame reads back that way, and no decoder gives such a path, so it is a fault of the header given, whatever form is written.",
+  'ax25-cannot-carry': "An AX.25 frame cannot carry the header: a call over 6 characters, in lower case or empty (an empty destination or path entry, from a held packet), an SSID over 15 or written with a leading zero or as -0, more than 8 path entries.",
+  'tnc2-cannot-carry': "A TNC2 line cannot carry the packet: its information field holds a CR or LF, which would end the line, or (where a library's line is text) is not UTF-8 or holds a NUL.",
   'invalid-third-party-header': "A third-party packet's inner header cannot be written as received: a bad inner address, used markers out of order, or a tolerated defect that is part of its data.",
   'invalid-addressee': "A message, bulletin, NWS bulletin, telemetry metadata or directed query addressee is empty, over 9 characters, holds a space or `:`, or is not the form its report needs (`NWS-`/`NWS_`, a group bulletin's digit).",
   'invalid-name': "An object or item name is the wrong length or holds a character a name cannot.",
-  'invalid-message-id': "A message ID is empty, over 5 characters or not letters and digits, or an ack or reject carries the wrong kind of ID.",
+  'invalid-message-id': "A message ID is over 5 characters or not letters and digits, or given empty to a builder (in neutral data an empty one is none: Read-back), or an ack or reject carries the wrong kind of ID.",
   'padding-space': "Text starts or ends with a space that would be read back as padding (an object name, a capability value).",
-  'too-long': "Free text or a list is longer than its field allows (message text over 67 characters, a project title over 23, more than 13 names, more than 5 analog values).",
+  'too-long': "Free text or a list is longer than its own field allows: message text over 67 characters, a project title over 23, more than 13 names, more than 5 analog values.",
   'information-field-too-long': "The information field as written is over 256 bytes (APRS12c ch. 3), and nothing else is wrong with the data: checked last, on the bytes written.",
   'malformed': "Text in a fixed-form field is not that form: a locator, a bit sense, telemetry bits, signpost text, a capability token, too few telemetry values.",
   'invalid-character': "Free text holds a character its field cannot carry: a control character (a byte below 0x20, a line break included, or 0x7F), a `{` in message-like text, or a character outside printable ASCII where only that is allowed.",
   'text-reads-as-field': "Free text would read back as a structured element (an altitude, a `!DAO!`, telemetry, a frequency, PHG/RNG/DFS, a timestamp or locator, a Mic-E device suffix, a weather field; a weather report's software type, unit and extra fields are free text), and no clean form avoids it.",
   'not-a-number': "A value is NaN or infinite.",
-  'value-out-of-range': "A number is outside what its field holds, after rounding (latitude, speed, gust, snowfall, range, footprint, bearing, telemetry sequence, PHG and DFS digits, an SSID).",
-  'value-has-no-form': "A value inside the range that no form reads back as: a course of 0 in Mic-E or compressed bytes, a humidity of 0, Mic-E telemetry 255, `T#MIC` with an empty first channel, a frequency between bands.",
+  'value-out-of-range': "A number is outside what its field holds, after rounding (latitude, speed, gust, snowfall, range, footprint, bearing, telemetry sequence, PHG and DFS digits, an SSID); a non-integer in a field held only in whole units or as a code (a PHG or DFS digit, an Agrelo quality, a comment telemetry sequence or value).",
+  'value-has-no-form': "A value inside the range that no form reads back as: a course of 0 in Mic-E or compressed bytes, a humidity of 0, Mic-E telemetry 255, `T#MIC` with an empty first channel, a frequency between bands, a warning or error given on a third-party inner packet that its written bytes do not read back with.",
   'value-given-twice': "A builder input was given in two units (Celsius and Fahrenheit, feet and metres, mm and inches).",
   'invalid-timestamp': "A timestamp has a field out of range, or is a format the report does not take (a status not DHM, MDHM outside a positionless weather report).",
   'missing-field': "The data lacks something its report or another field needs: an object's timestamp, a capability, a compressed course without its speed, wind direction without speed, a tone without a frequency, a GGA type without an altitude.",

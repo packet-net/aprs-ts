@@ -21,7 +21,7 @@ import {
   type AprsData,
   type AprsPacket,
 } from '../src/index.js';
-import { bytesToHex, encodeUtf8 } from '../src/bytes.js';
+import { bytesToHex, encodeUtf8, hexToBytes } from '../src/bytes.js';
 import { compareData } from '../src/encode/readback.js';
 import { fromNeutralData, toNeutralData, type Neutral } from '../src/neutral.js';
 
@@ -319,7 +319,7 @@ describe('the header is read back as it is written', () => {
     expect(Aprs.from('N0CALL').via('WIDE1-1*', 'N0CALL-1*', 'WIDE2-1').status('hi').build().toTnc2()).toBe('N0CALL>APZ001,WIDE1-1,N0CALL-1*,WIDE2-1:>hi');
     expect(encodeTnc2({ source: 'N0CALL', path: ['N0CALL-1*', 'WIDE2-1'], data: status })).toBe('N0CALL>APZ001,N0CALL-1*,WIDE2-1:>hi');
   });
-  it('refuses an entry before a used one that is not marked: tnc2-cannot-carry as a line, ax25-cannot-carry as a frame', () => {
+  it('refuses an entry before a used one that is not marked as invalid-path, in every form and before the data', () => {
     const code = (f: () => unknown): string | undefined => {
       try {
         f();
@@ -328,25 +328,26 @@ describe('the header is read back as it is written', () => {
       }
       return undefined;
     };
-    expect(code(() => encodeTnc2({ source: 'N0CALL', path: unusedBeforeUsed, data: status }))).toBe('tnc2-cannot-carry');
-    expect(code(() => encodeTnc2Bytes({ source: 'N0CALL', path: unusedBeforeUsed, data: status }))).toBe('tnc2-cannot-carry');
-    expect(code(() => encodeAx25({ source: 'N0CALL', path: unusedBeforeUsed, data: status }))).toBe('ax25-cannot-carry');
+    expect(code(() => encodeTnc2({ source: 'N0CALL', path: unusedBeforeUsed, data: status }))).toBe('invalid-path');
+    expect(code(() => encodeTnc2Bytes({ source: 'N0CALL', path: unusedBeforeUsed, data: status }))).toBe('invalid-path');
+    expect(code(() => encodeAx25({ source: 'N0CALL', path: unusedBeforeUsed, data: status }))).toBe('invalid-path');
+    // Judged when the header is given: before a data fault, and at build.
+    expect(code(() => encodeTnc2({ source: 'N0CALL', path: unusedBeforeUsed, data: { type: 'status', text: 'bad\n' } as AprsData }))).toBe('invalid-path');
     const built = Aprs.from('N0CALL').via('WIDE1-1').status('hi').build();
     expect(built.toTnc2()).toBe('N0CALL>APZ001,WIDE1-1:>hi');
-    const bad = Aprs.from('N0CALL').via({ address: 'WIDE1-1', used: false } as never, 'N0CALL-1*').status('hi').build();
-    expect(code(() => bad.toTnc2())).toBe('tnc2-cannot-carry');
-    expect(code(() => bad.toTnc2Bytes())).toBe('tnc2-cannot-carry');
-    expect(code(() => bad.toAx25())).toBe('ax25-cannot-carry');
-    expect(code(() => bad.toKiss())).toBe('ax25-cannot-carry');
+    expect(code(() => Aprs.from('N0CALL').via({ address: 'WIDE1-1', used: false } as never, 'N0CALL-1*').status('hi').build())).toBe('invalid-path');
+    expect(code(() => Aprs.from('N0CALL').via('WIDE1-1', 'N0CALL-1*').object('TOOLONGNAME', 1, 2).build())).toBe('invalid-path');
+    // The address comes before the path: an address that is not one is invalid-address.
+    expect(code(() => Aprs.from('N0CALL').via('WIDE1-1', 'N0CALL-1*', 'bad address').status('hi').build())).toBe('invalid-address');
   });
   it('checks the header a pass-through writer writes, and writes the information field as received', () => {
     const received = decodeTnc2('N0CALL>APZ001,WIDE1-1,N0CALL-1*:>hi\x07 odd');
     expect(packetToTnc2(received)).toBe('N0CALL>APZ001,WIDE1-1,N0CALL-1*:>hi\x07 odd');
     expect(decodeAx25(packetToAx25(received)).path).toEqual(received.path);
     const held: AprsPacket = { ...received, path: unusedBeforeUsed };
-    expect(() => packetToTnc2Bytes(held)).toThrow(AprsEncodeError);
-    expect(() => packetToTnc2(held)).toThrow(/cannot carry/);
-    expect(() => packetToAx25(held)).toThrow(AprsEncodeError);
+    expect(() => packetToTnc2Bytes(held)).toThrow(expect.objectContaining({ code: 'invalid-path' }));
+    expect(() => packetToTnc2(held)).toThrow(expect.objectContaining({ code: 'invalid-path' }));
+    expect(() => packetToAx25(held)).toThrow(expect.objectContaining({ code: 'invalid-path' }));
     // The information field is not re-encoded: a received field over 256 bytes is written as it came.
     const long = decodeTnc2(encodeUtf8(`N0CALL>APZ001:>${'x'.repeat(300)}`));
     expect(packetToTnc2Bytes(long).length).toBe('N0CALL>APZ001:'.length + 301);
@@ -369,7 +370,7 @@ describe('a data fault comes before a header the form cannot carry (R25)', () =>
   const tooLongObject = (p: ReturnType<typeof Aprs.from>) => p.object('TOOLONGNAME', 1, 2).timestamp(new Date('2026-09-27T09:23:45Z'), 'dhm-zulu');
 
   it('refuses the data first when building, whatever the path or call', () => {
-    expect(() => tooLongObject(Aprs.from('N0CALL').via('WIDE1-1', 'N0CALL-1*')).build()).toThrow(expect.objectContaining({ code: 'invalid-name' }));
+    expect(() => tooLongObject(Aprs.from('N0CALL').via('WIDE1-1*', 'N0CALL-1*')).build()).toThrow(expect.objectContaining({ code: 'invalid-name' }));
     expect(() => tooLongObject(Aprs.from('N0CALLXYZ')).build()).toThrow(expect.objectContaining({ code: 'invalid-name' }));
   });
 
@@ -381,11 +382,11 @@ describe('a data fault comes before a header the form cannot carry (R25)', () =>
 });
 
 describe('a held packet with an empty destination', () => {
-  it('is written empty in a line and as six spaces in a frame, which read back the same', () => {
+  it('is written empty in a line, and refused as ax25-cannot-carry in a frame, which would not be one a frame carries', () => {
     const packet = decodeTnc2('N0CALL>:>x');
     expect(packetToTnc2(packet)).toBe('N0CALL>:>x');
-    expect(bytesToHex(packetToAx25(packet)).slice(0, 14).toLowerCase()).toBe('404040404040e0');
-    expect(decodeAx25(packetToAx25(packet)).destination).toBe('');
+    expect(() => packetToAx25(packet)).toThrow(expect.objectContaining({ code: 'ax25-cannot-carry' }));
+    expect(() => packetToAx25(decodeAx25(hexToBytes('404040404040609C60868298986103F03E78')))).toThrow(expect.objectContaining({ code: 'ax25-cannot-carry' }));
   });
 });
 
