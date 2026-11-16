@@ -475,12 +475,12 @@ describe('1.0 API', () => {
     expect(Aprs.from('M0LTE').telemetryBits('11111111', 'Project').toTnc2()).toBe('M0LTE>APZ001::M0LTE    :BITS.11111111,Project');
   });
 
-  it('keeps where a Mic-E altitude was written in the data', () => {
+  it('keeps where a Mic-E altitude was written in the data, and the altitude as given', () => {
     const built = Aprs.from('N0CALL').micE(49.5, -72.75).symbol('//').altitudeFeet(100).build();
     if (built.data.type !== 'mic-e') throw new Error(built.data.type);
     expect(built.data.altitudeInComment).toBeUndefined();
-    const copy = encodeInformation({ ...built.data });
-    expect(decodeUtf8(copy.information)).toBe(decodeUtf8(built.information));
+    // The data holds the altitude as given, not rounded to the metre the Mic-E bytes hold.
+    expect(built.data.altitudeFeet).toBe(100);
     const decoded = decodeTnc2(built.toTnc2());
     if (decoded.data.type !== 'mic-e') throw new Error(decoded.data.type);
     expect(decoded.data.altitudeInComment).toBeUndefined();
@@ -524,8 +524,8 @@ describe('1.0 API', () => {
     const info = (data: Parameters<typeof encodeInformation>[0]): (() => unknown) => () => encodeInformation(data);
     const sym = { table: '/', code: '>' };
 
-    it('lists 27 codes with a meaning each', () => {
-      expect(REFUSAL_CODES).toHaveLength(27);
+    it('lists 28 codes with a meaning each', () => {
+      expect(REFUSAL_CODES).toHaveLength(28);
       for (const c of REFUSAL_CODES) expect(REFUSAL_MEANINGS[c].length).toBeGreaterThan(0);
     });
 
@@ -553,7 +553,7 @@ describe('1.0 API', () => {
     });
 
     it('names AX.25 and TNC2 refusals', () => {
-      expect(codeOf(() => encodeAx25({ source: 'TOOLONGCALL', destination: 'APRS', path: [], data: { type: 'status', text: 'x' } } as never))).toBe('ax25-cannot-carry');
+      expect(codeOf(() => encodeAx25({ source: 'TOOLONGCALL', destination: 'APRS', path: [], data: { type: 'status', text: 'x' } } as never))).toBe('invalid-address');
       expect(codeOf(() => packetToAx25(decodeTnc2('WB4APR-00>APRS:>x')))).toBe('ax25-cannot-carry');
     });
 

@@ -2,6 +2,7 @@
 // telemetry, queries, capabilities, and the rest.
 
 import { encodeUtf8Binary } from '../bytes.js';
+import { hasEmptyMessageId } from './common.js';
 import { DIRECTED_QUERY_TYPES } from '../decode/message.js';
 import { splitNmea } from '../decode/other.js';
 import { formatPath, isAprsIsAddress } from '../header.js';
@@ -28,7 +29,7 @@ import type {
   ThirdParty,
   UserDefined,
 } from '../types.js';
-import { checkSymbol, freeText, isValidTimestamp, numberText, pad, flag, numberFault, whole } from './common.js';
+import { checkSymbol, freeText, isValidTimestamp, numberText, pad, flag, numberFault, whole, exact } from './common.js';
 
 const MESSAGE_ID = /^[A-Za-z0-9]{1,5}$/;
 const REPLY_ACK = /^[A-Za-z0-9]{0,5}$/;
@@ -39,7 +40,9 @@ function addressee(a: string): string {
   return a.padEnd(9, ' ');
 }
 
-function messageId(id: string | undefined, replyAck: string | undefined): string {
+function messageId(given: string | undefined, replyAck: string | undefined): string {
+  // Empty and absent are one value: an empty message ID is no message ID.
+  const id = given === '' ? undefined : given;
   if (id === undefined) {
     if (replyAck !== undefined) {
       // A reply-ack wrong on its own is wrong whatever else is given.
@@ -61,6 +64,7 @@ function messageText(text: string, what = 'message text'): string {
 }
 
 export function encodeMessage(d: Message): string {
+  if (hasEmptyMessageId(d)) flag('invalid-message-id', 'a message ID is 1-5 letters or digits, not empty');
   // An addressee that makes the line a bulletin is not the form a message needs.
   if (/^(?:BLN[0-9A-Z]|NWS[-_])/.test(d.addressee)) flag('invalid-addressee', 'a message addressee cannot start BLN or NWS-, which make a bulletin');
   return `:${addressee(d.addressee)}:${messageText(d.text)}${messageId(d.messageId, d.replyAck)}`;
@@ -131,7 +135,8 @@ export function encodeDirectedQuery(d: DirectedQuery): string {
   // Absent text is empty text, so a query with no type has an invalid one (vectors interpretations.md).
   if (!/^(?:[A-Z]+|PING\?)$/.test(d.queryType)) flag('invalid-code', 'a query type is upper-case letters');
   let out = `:${addressee(d.addressee)}:?${d.queryType}`;
-  if (d.target !== undefined) {
+  // An empty target is no target.
+  if (d.target !== undefined && d.target !== '') {
     if (!/^[A-Za-z0-9-]{1,9}$/.test(d.target)) flag('invalid-addressee', 'a query target is one callsign');
     // A type the spec defines is followed straight by the target, an APRSH target padded to 9
     // characters; any other type has no fixed length, so its target follows one space.
@@ -270,11 +275,14 @@ export function encodeUserDefined(d: UserDefined): string {
 }
 
 export function encodeTest(d: TestData): string {
-  return `,${freeText(d.data ?? '', 'test data', false)}`;
+  // Data: a CR or LF inside is written (a line refuses it, `tnc2-cannot-carry`); only data ending in one has no form.
+  const data = d.data ?? '';
+  if (/[\r\n]$/.test(data)) flag('invalid-character', 'test data cannot end in a line break');
+  return `,${encodeUtf8Binary(data)}`;
 }
 
 export function encodeAgrelo(d: AgreloDf): string {
-  return `%${pad(whole(d.bearingDegrees, 0, 360, 'bearing'), 3)}/${whole(d.quality, 0, 9, 'quality')}`;
+  return `%${pad(whole(d.bearingDegrees, 0, 360, 'bearing'), 3)}/${exact(d.quality, 0, 9, 'quality')}`;
 }
 
 /** Checks a third-party packet's inner header, which is written before the inner data. */

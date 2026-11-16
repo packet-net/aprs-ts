@@ -33,8 +33,8 @@ const REQUIRED: Readonly<Record<string, Readonly<Record<string, Required>>>> = {
   item: LAT_LON,
   'mic-e': { ...LAT_LON, micEMessage: req('string', 'off-duty') },
   message: { text: req('string', '') },
-  ack: { ackedId: req('string', '1') },
-  reject: { rejectedId: req('string', '1') },
+  ack: {},
+  reject: {},
   bulletin: { text: req('string', '') },
   'nws-bulletin': { text: req('string', '') },
   'telemetry-names': { names: req('array', ['A']) },
@@ -79,8 +79,8 @@ const TEXT: Readonly<Record<string, readonly string[]>> = {
   object: ['name'],
   item: ['name'],
   message: ['addressee'],
-  ack: ['addressee'],
-  reject: ['addressee'],
+  ack: ['addressee', 'ackedId'],
+  reject: ['addressee', 'rejectedId'],
   bulletin: ['addressee'],
   'nws-bulletin': ['addressee'],
   'telemetry-names': ['addressee'],
@@ -114,7 +114,8 @@ function checkFields(o: Record<string, unknown>, fields: Readonly<Record<string,
   for (const [k, r] of Object.entries(fields)) {
     const missing = o[k] === undefined;
     if (!missing && isKind(o[k], r.kind)) continue;
-    const code: RefusalCode = missing ? 'missing-field' : 'malformed';
+    // A value that is not a number, whatever it is (a bigint, a string), is not-a-number in a numeric field.
+    const code: RefusalCode = missing ? 'missing-field' : r.kind === 'number' ? 'not-a-number' : 'malformed';
     const reason = missing ? `${what} needs ${k}` : `${what}: ${k} is not a ${r.kind}`;
     if (r.standIn === undefined) refuse(code, reason);
     held.push(new AprsEncodeError(reason, code));
@@ -188,4 +189,52 @@ export function guarded<T>(step: () => T, code: RefusalCode = 'malformed'): T {
     if (e instanceof AprsEncodeError) throw e;
     throw new AprsEncodeError(`the data is not of a shape this encoder can use: ${e instanceof Error ? e.message : String(e)}`, code);
   }
+}
+
+const POSITIONED_KEYS = [
+  'latitude', 'longitude', 'ambiguity', 'symbol', 'compressed', 'compression', 'courseDegrees', 'speedKnots', 'altitudeFeet', 'phg', 'rangeMiles',
+  'dfs', 'area', 'dfBearing', 'storm', 'dao', 'telemetry', 'frequency', 'weather', 'signpost', 'comment',
+];
+
+/** The fields each type of data has (types.ts); `type` is always one. */
+const FIELDS: Readonly<Record<string, readonly string[]>> = {
+  position: [...POSITIONED_KEYS, 'timestamp', 'messaging'],
+  'mic-e': [...POSITIONED_KEYS, 'micEMessage', 'oldData', 'altitudeInComment', 'typeCode', 'deviceSuffix', 'locator', 'legacyTelemetry', 'destinationSsid'],
+  object: [...POSITIONED_KEYS, 'name', 'killed', 'timestamp'],
+  item: [...POSITIONED_KEYS, 'name', 'killed'],
+  message: ['addressee', 'text', 'messageId', 'replyAck'],
+  ack: ['addressee', 'ackedId', 'replyAck', 'messageId'],
+  reject: ['addressee', 'rejectedId', 'replyAck', 'messageId'],
+  bulletin: ['addressee', 'text', 'messageId'],
+  'nws-bulletin': ['addressee', 'text', 'messageId'],
+  'telemetry-names': ['addressee', 'names', 'messageId'],
+  'telemetry-units': ['addressee', 'units', 'messageId'],
+  'telemetry-coefficients': ['addressee', 'coefficients', 'coefficientsText', 'messageId'],
+  'telemetry-bits': ['addressee', 'bits', 'project', 'messageId'],
+  'directed-query': ['addressee', 'queryType', 'target'],
+  status: ['timestamp', 'locator', 'symbol', 'beam', 'text'],
+  telemetry: ['sequence', 'analog', 'analogText', 'bits', 'comment'],
+  weather: ['timestamp', 'weather', 'comment'],
+  'raw-weather': ['format', 'data'],
+  nmea: ['sentence', 'hasChecksum', 'latitude', 'longitude', 'fix', 'courseDegrees', 'speedKnots', 'altitudeM', 'time', 'waypoint', 'comment'],
+  'maidenhead-beacon': ['locator', 'comment'],
+  query: ['queryType', 'footprint'],
+  capabilities: ['capabilities'],
+  'third-party': ['packet'],
+  'user-defined': ['userId', 'packetType', 'data'],
+  test: ['data'],
+  'agrelo-df': ['bearingDegrees', 'quality'],
+  unrecognized: ['reason'],
+};
+
+/**
+ * The fields a data object holds that its type has no place for (an item's timestamp, a bulletin's
+ * reply-ack, an ack's text): the neutral form would leave them out, so a typed object that carries
+ * one is refused `field-not-allowed`, as the rule says of a field the report has no place for.
+ * An absent value (`undefined`, `null`, `false`) is no field.
+ */
+export function strayFields(data: Record<string, unknown>): string[] {
+  const own = FIELDS[data.type as string];
+  if (own === undefined) return [];
+  return Object.keys(data).filter((k) => k !== 'type' && !own.includes(k) && data[k] !== undefined && data[k] !== null && data[k] !== false);
 }

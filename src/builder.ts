@@ -13,8 +13,8 @@
 // `build()` encodes the packet, so anything the spec does not allow is refused there, with an
 // `AprsEncodeError` that says why.
 
-import { AprsEncodeError, DEFAULT_DESTINATION, firstRefusal, markGivenTwice, markMicEAltitudeBytesOnly, nearest, numberFault, refuse } from './encode/common.js';
-import { ax25Of, checkHeaderAddresses, encodeInformation, tnc2BytesOf, tnc2TextOf, wrapKiss } from './encode/index.js';
+import { AprsEncodeError, DEFAULT_DESTINATION, firstRefusal, markEmptyMessageId, markGivenTwice, nearest, numberFault, refuse } from './encode/common.js';
+import { ax25Of, checkHeaderAddresses, encodeInformationWith, tnc2BytesOf, tnc2TextOf, wrapKiss, type WriteOptions } from './encode/index.js';
 import { symbolOf } from './symbols.js';
 import type {
   AprsData,
@@ -40,15 +40,31 @@ export interface BuiltPacket {
   readonly destination: string;
   readonly path: readonly PathEntry[];
   readonly data: AprsData;
-  /** The information field bytes. */
+  /** A copy of the information field bytes: changing it changes nothing the packet writes. */
   readonly information: Uint8Array;
-  /** The TNC2 / APRS-IS line. */
+  /**
+   * The TNC2 / APRS-IS line.
+   *
+   * @throws AprsEncodeError (`tnc2-cannot-carry`) when a line cannot carry the packet: the header reads back as another, or the information field holds a CR or LF before its end.
+   */
   toTnc2(): string;
-  /** The TNC2 / APRS-IS line as bytes. */
+  /**
+   * The TNC2 / APRS-IS line as bytes.
+   *
+   * @throws AprsEncodeError (`tnc2-cannot-carry`) as `toTnc2` does.
+   */
   toTnc2Bytes(): Uint8Array;
-  /** The AX.25 UI frame (no flags, no FCS). */
+  /**
+   * The AX.25 UI frame (no flags, no FCS).
+   *
+   * @throws AprsEncodeError (`ax25-cannot-carry`) when a frame cannot carry the header: a call over six characters or in lower case, an SSID over 15, or more than 8 path entries.
+   */
   toAx25(): Uint8Array;
-  /** The AX.25 frame wrapped for a KISS TNC. */
+  /**
+   * The AX.25 frame wrapped for a KISS TNC.
+   *
+   * @throws AprsEncodeError (`ax25-cannot-carry`) as `toAx25` does; RangeError unless `port` is an integer 0-15.
+   */
   toKiss(port?: number): Uint8Array;
 }
 
@@ -63,31 +79,34 @@ function pathEntryOf(entry: string | PathEntry): PathEntry {
   return entry.endsWith('*') ? { address: entry.slice(0, -1), used: true } : { address: entry, used: false };
 }
 
-function pathText(entry: PathEntry): string {
-  return entry.used ? `${entry.address}*` : entry.address;
-}
-
-/** Encodes the data and checks the header's addresses, so a `BuiltPacket` can always be written. */
-function built(header: Header, data: AprsData): BuiltPacket {
-  const path = header.path.map((e) => Object.freeze({ ...e }));
-  const text = path.map(pathText);
-  // The header is written first, so its faults come before any in the data (vectors README,
-  // Refusal reasons); a Mic-E destination is computed, and always a valid address.
-  const given = data.type === 'mic-e' ? DEFAULT_DESTINATION : (header.destination ?? DEFAULT_DESTINATION);
-  checkHeaderAddresses(header.source, given, text);
-  const encoded = encodeChecked(data);
+/**
+ * Judges the header given, encodes the data and keeps the information field, so a `BuiltPacket`
+ * can be written. An address APRS-IS does not allow (`invalid-address`) and a path whose entry not
+ * marked used comes before a used one (`invalid-path`) are refused first, whatever form is written,
+ * then the data; a header only one form cannot carry (a call a frame cannot carry) is refused by the
+ * call that writes that form. A Mic-E destination is computed, and always a valid address. A Mic-E
+ * altitude goes in the Mic-E bytes first, asked of the encoder as an argument: the data holds the
+ * value as given.
+ */
+function built(header: Header, makeData: () => AprsData, micE = false): BuiltPacket {
+  const path = header.path.map((e) => Object.freeze({ address: e.address, used: Boolean(e.used) }));
+  const given = micE ? DEFAULT_DESTINATION : (header.destination ?? DEFAULT_DESTINATION);
+  checkHeaderAddresses(header.source, given, path);
+  const data = makeData();
+  const encoded = encodeChecked(data, micE ? { micEBytesFirst: true } : {});
   const destination = encoded.destination ?? header.destination ?? DEFAULT_DESTINATION;
-  checkHeaderAddresses(header.source, destination, text);
-  const information = encoded.information;
+  checkHeaderAddresses(header.source, destination, path);
+  // The writers use this copy, which nothing outside can reach; the packet gives out another.
+  const information = new Uint8Array(encoded.information);
   const frame = (): Uint8Array => ax25Of(header.source, destination, path, information);
   return Object.freeze({
     source: header.source,
     destination,
     path: Object.freeze(path),
     data,
-    information,
-    toTnc2: () => tnc2TextOf(tnc2BytesOf(header.source, destination, text, information)),
-    toTnc2Bytes: () => tnc2BytesOf(header.source, destination, text, information),
+    information: new Uint8Array(information),
+    toTnc2: () => tnc2TextOf(tnc2BytesOf(header.source, destination, path, information)),
+    toTnc2Bytes: () => tnc2BytesOf(header.source, destination, path, information),
     toAx25: frame,
     toKiss: (port = 0) => wrapKiss(frame(), port),
   });
@@ -146,14 +165,14 @@ const aprsUnits = new WeakMap<object, Weather>();
  * checked on its own, so the refusal is the first code in the order among both encodings and
  * `value-given-twice` (vectors README, Builder rules). Other data is encoded as it is.
  */
-function encodeChecked(data: AprsData): ReturnType<typeof encodeInformation> {
+function encodeChecked(data: AprsData, options: WriteOptions): ReturnType<typeof encodeInformationWith> {
   const weather = (data as { weather?: object }).weather;
   const other = weather === undefined ? undefined : aprsUnits.get(weather);
-  if (other === undefined) return encodeInformation(data);
+  if (other === undefined) return encodeInformationWith(data, options);
   const faults: AprsEncodeError[] = [];
   for (const d of [data, { ...data, weather: other } as AprsData]) {
     try {
-      encodeInformation(d);
+      encodeInformationWith(d, options);
     } catch (e) {
       if (!(e instanceof AprsEncodeError)) throw e;
       faults.push(e);
@@ -336,7 +355,7 @@ export class DataBuilder {
 
   /** Encodes the packet; throws `AprsEncodeError` if the spec does not allow it. */
   build(): BuiltPacket {
-    return built(this.header, typeof this.value === 'function' ? this.value() : this.value);
+    return built(this.header, () => (typeof this.value === 'function' ? this.value() : this.value));
   }
 
   /** Shorthand for `build().toTnc2()`. */
@@ -496,11 +515,17 @@ export class PositionBuilder extends ReportBuilder<PositionBuilder> {
   }
 
   build(): BuiltPacket {
-    const data: Mutable<Extract<AprsData, { type: 'position' }>> = { type: 'position', ...this.fields };
-    if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
-    if (this.timestampValue) data.timestamp = this.timestampValue;
-    if (this.messagingValue) data.messaging = true;
-    return built(this.header, data);
+    return built(
+      this.header,
+      () => {
+        const data: Mutable<Extract<AprsData, { type: 'position' }>> = { type: 'position', ...this.fields };
+        if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
+        if (this.timestampValue) data.timestamp = this.timestampValue;
+        if (this.messagingValue) data.messaging = true;
+        return data;
+      },
+      
+    );
   }
 
   toTnc2(): string {
@@ -539,15 +564,21 @@ export class ObjectBuilder extends ReportBuilder<ObjectBuilder> {
   }
 
   build(): BuiltPacket {
-    const data: Mutable<Extract<AprsData, { type: 'object' }>> = {
-      type: 'object',
-      name: this.name,
-      ...this.fields,
-    };
-    if (this.timestampValue) data.timestamp = this.timestampValue;
-    if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
-    if (this.killedValue) data.killed = true;
-    return built(this.header, data);
+    return built(
+      this.header,
+      () => {
+        const data: Mutable<Extract<AprsData, { type: 'object' }>> = {
+        type: 'object',
+        name: this.name,
+        ...this.fields,
+        };
+        if (this.timestampValue) data.timestamp = this.timestampValue;
+        if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
+        if (this.killedValue) data.killed = true;
+        return data;
+      },
+      
+    );
   }
 
   toTnc2(): string {
@@ -579,10 +610,16 @@ export class ItemBuilder extends ReportBuilder<ItemBuilder> {
   }
 
   build(): BuiltPacket {
-    const data: Mutable<Extract<AprsData, { type: 'item' }>> = { type: 'item', name: this.name, ...this.fields };
-    if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
-    if (this.killedValue) data.killed = true;
-    return built(this.header, data);
+    return built(
+      this.header,
+      () => {
+        const data: Mutable<Extract<AprsData, { type: 'item' }>> = { type: 'item', name: this.name, ...this.fields };
+        if (this.weatherValue) data.weather = weatherOf(this.weatherValue);
+        if (this.killedValue) data.killed = true;
+        return data;
+      },
+      
+    );
   }
 
   toTnc2(): string {
@@ -638,20 +675,22 @@ export class MicEBuilder extends PositionedBuilder<MicEBuilder> {
   }
 
   build(): BuiltPacket {
-    const data: Mutable<Extract<AprsData, { type: 'mic-e' }>> = { type: 'mic-e', micEMessage: this.messageValue, ...this.fields };
-    // A course of 0 (after rounding) is unknown, which Mic-E writes as 0: no course (B1).
-    if (data.courseDegrees !== undefined && Number.isFinite(data.courseDegrees) && nearest(data.courseDegrees) === 0) delete data.courseDegrees;
-    // An altitude in either unit goes in the Mic-E altitude bytes, rounded once to the metre from
-    // the value given; one outside the bytes' range is refused, never moved to a /A=.
-    if (data.altitudeFeet !== undefined && Number.isFinite(data.altitudeFeet)) {
-      data.altitudeFeet = nearest(data.altitudeFeet * 0.3048) / 0.3048;
-      markMicEAltitudeBytesOnly(data);
-    }
-    if (this.typeCodeValue !== undefined) data.typeCode = this.typeCodeValue;
-    if (this.deviceSuffixValue !== undefined) data.deviceSuffix = this.deviceSuffixValue;
-    if (this.locatorValue !== undefined) data.locator = this.locatorValue;
-    if (this.oldValue) data.oldData = true;
-    return built(this.header, data);
+    return built(
+      this.header,
+      () => {
+        const data: Mutable<Extract<AprsData, { type: 'mic-e' }>> = { type: 'mic-e', micEMessage: this.messageValue, ...this.fields };
+        // A course of 0 (after rounding) is unknown, which Mic-E writes as 0: no course (B1).
+        if (data.courseDegrees !== undefined && Number.isFinite(data.courseDegrees) && nearest(data.courseDegrees) === 0) delete data.courseDegrees;
+        // An altitude in either unit stays as given: the encoder writes it in the Mic-E altitude bytes
+        // first (rounded once to the metre), then, only if a /A= holds the value given exactly, in one.
+        if (this.typeCodeValue !== undefined) data.typeCode = this.typeCodeValue;
+        if (this.deviceSuffixValue !== undefined) data.deviceSuffix = this.deviceSuffixValue;
+        if (this.locatorValue !== undefined) data.locator = this.locatorValue;
+        if (this.oldValue) data.oldData = true;
+        return data;
+      },
+      true,
+    );
   }
 
   toTnc2(): string {
@@ -683,14 +722,22 @@ export class MessageBuilder {
   }
 
   build(): BuiltPacket {
-    const data: Mutable<Extract<AprsData, { type: 'message' }>> = {
-      type: 'message',
-      addressee: this.addressee,
-      text: this.text,
-    };
-    if (this.idValue !== undefined) data.messageId = this.idValue;
-    if (this.replyAckValue !== undefined) data.replyAck = this.replyAckValue;
-    return built(this.header, data);
+    return built(
+      this.header,
+      () => {
+        const data: Mutable<Extract<AprsData, { type: 'message' }>> = {
+          type: 'message',
+          addressee: this.addressee,
+          text: this.text,
+        };
+        if (this.idValue !== undefined) data.messageId = this.idValue;
+        if (this.replyAckValue !== undefined) data.replyAck = this.replyAckValue;
+        // A builder's empty message ID is out of range, refused; neutral data's is no ID.
+        if (this.idValue === '') markEmptyMessageId(data);
+        return data;
+      },
+      
+    );
   }
 
   toTnc2(): string {
@@ -740,13 +787,19 @@ export class StatusBuilder {
   }
 
   build(): BuiltPacket {
-    const data: Mutable<Extract<AprsData, { type: 'status' }>> = { type: 'status' };
-    if (this.timestampValue) data.timestamp = this.timestampValue;
-    if (this.locatorValue !== undefined) data.locator = this.locatorValue;
-    if (this.symbolValue !== undefined) data.symbol = this.symbolValue;
-    if (this.beamValue) data.beam = this.beamValue;
-    if (this.text !== undefined && this.text.length > 0) data.text = this.text;
-    return built(this.header, data);
+    return built(
+      this.header,
+      () => {
+        const data: Mutable<Extract<AprsData, { type: 'status' }>> = { type: 'status' };
+        if (this.timestampValue) data.timestamp = this.timestampValue;
+        if (this.locatorValue !== undefined) data.locator = this.locatorValue;
+        if (this.symbolValue !== undefined) data.symbol = this.symbolValue;
+        if (this.beamValue) data.beam = this.beamValue;
+        if (this.text !== undefined && this.text.length > 0) data.text = this.text;
+        return data;
+      },
+      
+    );
   }
 
   toTnc2(): string {
@@ -772,18 +825,24 @@ export class TelemetryBuilder {
   }
 
   build(): BuiltPacket {
-    const number = this.sequence;
-    // A sequence left out is `missing-field`, held by the encoder until the rest is checked.
-    const left = number === undefined || number === null;
-    if (!left && (!Number.isInteger(number) || number < 0 || number > 999)) refuse(numberFault(number), `telemetry sequence ${String(number)} is not 0-999`);
-    const data = {
-      type: 'telemetry',
-      analog: [...this.analog],
-      bits: this.bits,
-      ...(left ? {} : { sequence: String(number).padStart(3, '0') }),
-    } as Mutable<Extract<AprsData, { type: 'telemetry' }>>;
-    if (this.commentValue !== undefined && this.commentValue.length > 0) data.comment = this.commentValue;
-    return built(this.header, data);
+    return built(
+      this.header,
+      () => {
+        const number = this.sequence;
+        // A sequence left out is `missing-field`, held by the encoder until the rest is checked.
+        const left = number === undefined || number === null;
+        if (!left && (!Number.isInteger(number) || number < 0 || number > 999)) refuse(numberFault(number), `telemetry sequence ${String(number)} is not 0-999`);
+        const data = {
+        type: 'telemetry',
+        analog: [...this.analog],
+        bits: this.bits,
+        ...(left ? {} : { sequence: String(number).padStart(3, '0') }),
+        } as Mutable<Extract<AprsData, { type: 'telemetry' }>>;
+        if (this.commentValue !== undefined && this.commentValue.length > 0) data.comment = this.commentValue;
+        return data;
+      },
+      
+    );
   }
 
   toTnc2(): string {

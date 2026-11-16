@@ -19,6 +19,8 @@ import {
   AprsEncodeError,
   decodeTnc2,
   encodeInformation,
+  packetToAx25,
+  packetToTnc2,
   formatDiagnostic,
   ParseOptions,
   type AprsPacket,
@@ -49,6 +51,7 @@ interface KnownDifference {
 const known: KnownDifference[] = JSON.parse(readFileSync(new URL('./known-differences.json', import.meta.url), 'utf8')).differences;
 const knownReason = (id: string, check: string): string | undefined => known.find((k) => k.id === id && k.check === check)?.reason;
 const tolerable = loadTolerable();
+let toleranceRan = 0;
 
 function check(id: string, name: string, body: () => void): void {
   const reason = knownReason(id, name);
@@ -157,7 +160,7 @@ function encodeCheck(c: Case): string[] {
 const { buildRecipe } = recipeBuilder({ Aprs, AprsEncodeError, refusalRank });
 
 function buildCheck(c: Case): string[] {
-  const r = buildRecipe(0, c.input.build);
+  const r = buildRecipe(0, c.input.build, c.input.write === 'ax25' ? 'ax25' : 'tnc2');
   if (r.result === 'unsupported') return [`the recipe is unsupported: ${r.reason}`];
   if (r.result === 'refused') {
     if (!c.expect.refused) return [`the builder refused (${r.refusal}): ${r.reason}`];
@@ -165,8 +168,49 @@ function buildCheck(c: Case): string[] {
     return want === undefined || want === r.refusal ? [] : [`refused with ${r.refusal} (${r.reason}), want ${want}`];
   }
   if (c.expect.refused) return [`expected a refusal, built ${JSON.stringify(latin1(r.bytes))}`];
-  const want = c.expect.tnc2_hex !== undefined ? hexToBytes(c.expect.tnc2_hex as string) : encodeUtf8(c.expect.tnc2 as string);
+  const want =
+    c.input.write === 'ax25' ? hexToBytes(c.expect.ax25_hex as string) : c.expect.tnc2_hex !== undefined ? hexToBytes(c.expect.tnc2_hex as string) : encodeUtf8(c.expect.tnc2 as string);
   return hex(want) === hex(r.bytes) ? [] : [`built ${JSON.stringify(latin1(r.bytes))}, want ${JSON.stringify(latin1(want))}`];
+}
+
+/** A decode case's `pass_through`: the lenient packet written back as held, with this library's pass-through writers. */
+function passThroughCheck(c: Case, lenient: Result, inner = false): string[] {
+  if ('header_error' in lenient) return ['the lenient decoder rejected the header'];
+  const want = (inner ? c.pass_through_inner : c.pass_through) as { tnc2?: string; tnc2_refusal?: string; ax25_hex?: string; ax25_refusal?: string };
+  // `pass_through_inner`: the inner packet of a third-party packet, taken out and written on its own.
+  let held = lenient.packet;
+  if (inner) {
+    if (lenient.packet.data.type !== 'third-party') return ['the case has pass_through_inner but the packet is not third-party'];
+    held = lenient.packet.data.packet;
+  }
+  // `header`: the held packet's information field is written under that header instead of its own,
+  // as a program re-addressing a held packet does (the packet with its header changed).
+  const given = (inner ? c.pass_through_inner : c.pass_through) as { header?: { source?: string; destination?: string; path?: string[] } };
+  if (given.header !== undefined) {
+    const h = given.header;
+    held = {
+      ...held,
+      source: h.source ?? held.source,
+      destination: h.destination ?? held.destination,
+      path: (h.path ?? held.path.map((e) => (e.used ? `${e.address}*` : e.address))).map((e) => (e.endsWith('*') ? { address: e.slice(0, -1), used: true } : { address: e, used: false })),
+    };
+  }
+  const problems: string[] = [];
+  const run = (what: string, write: () => string, text: string | undefined, refusal: string | undefined): void => {
+    if (text === undefined && refusal === undefined) return;
+    try {
+      const got = write();
+      if (refusal !== undefined) problems.push(`${what}: expected a refusal (${refusal}), wrote ${JSON.stringify(got)}`);
+      else if (got !== text) problems.push(`${what}: wrote ${JSON.stringify(got)}, want ${JSON.stringify(text)}`);
+    } catch (e) {
+      if (!(e instanceof AprsEncodeError)) throw e;
+      if (refusal === undefined) problems.push(`${what}: refused with ${e.code} (${e.message})`);
+      else if (refusal !== e.code) problems.push(`${what}: refused with ${e.code} (${e.message}), want ${refusal}`);
+    }
+  };
+  run('tnc2', () => packetToTnc2(held), want.tnc2, want.tnc2_refusal);
+  run('ax25', () => hex(packetToAx25(held)).toUpperCase(), want.ax25_hex?.toUpperCase(), want.ax25_refusal);
+  return problems;
 }
 
 // A case without `device` says nothing about device identification (vectors README, "Rules the
@@ -199,7 +243,30 @@ for (const { file, cases } of loadCases()) {
       check(c.id, 'strict', () => fail(checkStrict(decode(input, ParseOptions.strict), c)));
       const code = singleTolerance(c, tolerable);
       if (code !== undefined) {
-        check(c.id, 'tolerance', () => fail(checkStrict(decode(input, ParseOptions.lenient.without(code)), c)));
+        toleranceRan++;
+        // strict a reading, or rejected by this code: the result is the strict one. Rejected by a
+        // different code: turning this tolerance off gives a reading with that code as a warning
+        // (README, "Checking a case").
+        const strictCode = c.strict !== undefined && c.strict !== 'same' ? c.strict.rejected_by : undefined;
+        check(c.id, 'tolerance', () => {
+          const r = decode(input, ParseOptions.lenient.without(code));
+          if (strictCode === undefined || strictCode === code) {
+            fail(checkStrict(r, c));
+          } else if ('header_error' in r) {
+            fail([`header rejected, want a reading with warning:${strictCode}`]);
+          } else {
+            const problems: string[] = [];
+            if (r.data.type === 'unrecognized') problems.push('want a reading, got unrecognized');
+            if (!r.diagnostics.includes(`warning:${strictCode}`)) problems.push(`want warning:${strictCode} among ${JSON.stringify(r.diagnostics)}`);
+            fail(problems);
+          }
+        });
+      }
+      if (c.pass_through !== undefined) {
+        check(c.id, 'pass-through', () => fail(passThroughCheck(c, decode(input, ParseOptions.lenient))));
+      }
+      if (c.pass_through_inner !== undefined) {
+        check(c.id, 'pass-through-inner', () => fail(passThroughCheck(c, decode(input, ParseOptions.lenient), true)));
       }
       if (c.reencode !== undefined) {
         check(c.id, 'reencode', () => fail(reencodeCheck(c, decode(input, ParseOptions.lenient))));
@@ -207,3 +274,12 @@ for (const { file, cases } of loadCases()) {
     }
   });
 }
+
+// The tolerance check runs on every case whose lenient diagnostics name exactly one tolerable
+// code, none skipped, so the count shows if a mistake drops cases.
+describe('tolerance check coverage', () => {
+  it('runs on every case with exactly one tolerable code', () => {
+    console.log(`tolerance check ran on ${toleranceRan} cases`);
+    expect(toleranceRan).toBeGreaterThanOrEqual(726);
+  });
+});

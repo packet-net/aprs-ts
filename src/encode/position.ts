@@ -19,7 +19,7 @@ import type {
   WeatherReport,
 } from '../types.js';
 import { identifyMicE } from '../deviceid.js';
-import { base91, checkSymbol, freeText, isValidTimestamp, micEAltitudeBytesOnly, nearest, pad, flag, numberFault, refuse, timestamp7, whole } from './common.js';
+import { base91, checkSymbol, freeText, isValidTimestamp, nearest, pad, flag, numberFault, refuse, timestamp7, whole, exact } from './common.js';
 
 const EPS = 1e-9;
 const CUT_TOLERANCE = 1e-6;
@@ -225,11 +225,11 @@ function courseSpeed(course: number | undefined, speed: number | undefined, what
 }
 
 function heightChar(h: number): string {
-  return String.fromCharCode(whole(h, 0, 78, 'height code') + 48);
+  return String.fromCharCode(exact(h, 0, 78, 'height code') + 48);
 }
 
 function rateChar(r: number): string {
-  const v = whole(r, 1, 35, 'beacons per hour');
+  const v = exact(r, 1, 35, 'beacons per hour');
   return v <= 9 ? String(v) : String.fromCharCode(55 + v);
 }
 
@@ -275,19 +275,31 @@ export function frequencyText(f: VoiceFrequency): string {
       default: {
         const letter = f.tone === 'tone' ? 'T' : f.tone === 'ctcss' ? 'C' : f.tone === 'dcs' ? 'D' : refuse('invalid-code', 'unknown tone type');
         if (f.toneValue === undefined) flag('missing-field', 'a tone needs its value');
-        else out += ' ' + (narrow ? letter.toLowerCase() : letter) + pad(whole(f.toneValue, 0, 999, 'tone'), 3);
+        else out += ' ' + (narrow ? letter.toLowerCase() : letter) + pad(exact(f.toneValue, 0, 999, 'tone'), 3);
       }
     }
   } else if (f.narrow) {
     flag('missing-field', 'narrow modulation is written with the tone');
   }
   if (f.offsetKhz !== undefined) {
-    if (f.offsetKhz % 10 !== 0) flag('value-has-no-form', 'the offset is in tens of kHz');
-    const v = whole(Math.abs(f.offsetKhz) / 10, 0, 999, 'offset');
+    // Out of range (or a fraction, never rounded) comes before the step: a whole-kHz offset that is
+    // in range and not a multiple of 10 has no form.
+    const inRange = Number.isFinite(f.offsetKhz) && Math.abs(f.offsetKhz) <= 9990;
+    const wholeKhz = Number.isInteger(f.offsetKhz);
+    let v = 0;
+    if (wholeKhz && f.offsetKhz % 10 !== 0) {
+      if (inRange) flag('value-has-no-form', 'the offset is in tens of kHz');
+      else flag('value-out-of-range', 'the offset is out of range (0-999 tens of kHz)');
+    } else if (!Number.isFinite(f.offsetKhz)) flag('not-a-number', `the offset ${f.offsetKhz} is not a number`);
+    else if (!wholeKhz) flag('value-out-of-range', `the offset ${f.offsetKhz} kHz is not a whole number`);
+    else {
+      v = Math.abs(f.offsetKhz) / 10;
+      if (v > 999) flag('value-out-of-range', `the offset ${f.offsetKhz} kHz is out of range (0 to 9990)`);
+    }
     out += ` ${f.offsetKhz < 0 ? '-' : '+'}${pad(v, 3)}`;
   }
   if (f.range !== undefined) {
-    out += ` R${pad(whole(f.range, 0, 999, 'range'), 2)}${f.rangeKm ? 'k' : 'm'}`;
+    out += ` R${pad(exact(f.range, 0, 999, 'range'), 2)}${f.rangeKm ? 'k' : 'm'}`;
   } else if (f.rangeKm) {
     flag('missing-field', 'range in km needs a range');
   }
@@ -298,11 +310,11 @@ export function telemetryText(t: CommentTelemetry): string {
   if (t.analog.length > 5) flag('too-long', 'comment telemetry has 1-5 analog values');
   else if (t.analog.length < 1) flag('malformed', 'comment telemetry has 1-5 analog values');
   if (t.digital !== undefined && t.analog.length !== 5) flag('malformed', 'comment telemetry bits come after all five analog values');
-  const v = (n: number, what: string): string => base91(whole(n, 0, 8280, what), 2);
+  const v = (n: number, what: string): string => base91(exact(n, 0, 8280, what), 2);
   let out = '|' + v(t.sequence, 'telemetry sequence');
   for (const a of t.analog) out += v(a, 'telemetry value');
   // Eight binary channels; bits 9-13 are reserved.
-  if (t.digital !== undefined) out += base91(whole(t.digital, 0, 255, 'telemetry bits'), 2);
+  if (t.digital !== undefined) out += base91(exact(t.digital, 0, 255, 'telemetry bits'), 2);
   return out + '|';
 }
 
@@ -376,14 +388,27 @@ function weatherFields(w: Weather, mandatory: boolean): string {
   }
   if (w.snow24hIn !== undefined) out += 's' + snowfallText(w.snow24hIn);
   if (w.rainRaw !== undefined) out += '#' + pad(whole(w.rainRaw, 0, 999, 'raw rain counter'), 3);
-  for (const e of w.extra ?? []) {
-    if (!/^[A-Za-z]$/.test(e.letter) || 'csgtrpPhbLl'.includes(e.letter)) flag('invalid-character', `${e.letter} is not an extra weather field letter`);
-    if (!/^[0-9.-]{2,}$/.test(e.value) || !/[0-9]$/.test(e.value)) flag('invalid-character', 'an extra weather field is digits, dots or -, ending in a digit');
+  if (w.extra !== undefined && !Array.isArray(w.extra)) flag('malformed', 'the extra weather fields are a list of { letter, value }');
+  for (const e of Array.isArray(w.extra) ? w.extra : []) {
+    // Extra fields are free text: a control character is refused as one, and text that would read
+    // as something else (a field already read, a letter or a value of the wrong shape) as text that reads as a field.
+    if (typeof e !== 'object' || e === null || typeof e.letter !== 'string' || typeof e.value !== 'string') {
+      flag('malformed', 'an extra weather field is { letter, value }, both text');
+      continue;
+    }
+    if (/[\x00-\x1f\x7f]/.test(e.letter + e.value)) flag('invalid-character', 'an extra weather field contains a control character');
+    if (!/^[A-Za-z]$/.test(e.letter) || 'csgtrpPhbLl'.includes(e.letter)) flag('text-reads-as-field', `${JSON.stringify(e.letter)} is not a letter an extra weather field can use (one letter the spec does not define)`);
+    if (!/^[0-9.-]*$/.test(e.value) || !/[0-9]$/.test(e.value)) flag('text-reads-as-field', `the extra weather field value ${JSON.stringify(e.value.length > 20 ? `${e.value.slice(0, 20)}...` : e.value)} is not digits, dots or -, ending in a digit`);
+    else if (e.value.length < 2) flag('text-reads-as-field', `the extra weather field value ${JSON.stringify(e.value)} is one character, and a letter with one digit reads as text: use at least two`);
     out += e.letter + e.value;
   }
   if (w.software !== undefined || w.unit !== undefined) {
-    if (w.software === undefined || !/^[A-Za-z]$/.test(w.software)) flag('text-reads-as-field', 'the weather software type is one letter');
-    if (w.unit === undefined || !/^[A-Za-z0-9_-]{2,4}$/.test(w.unit) || /^[0-9]+$/.test(w.unit))
+    // One thing, a letter then a 2-4 character unit: either alone is a field the report needs.
+    if (w.software === undefined) flag('missing-field', 'a weather unit goes with a software type');
+    else if (w.unit === undefined) flag('missing-field', 'a weather software type goes with a unit');
+    if (/[\x00-\x1f\x7f]/.test((w.software ?? '') + (w.unit ?? ''))) flag('invalid-character', 'a weather software type or unit contains a control character');
+    if (w.software !== undefined && !/^[A-Za-z]$/.test(w.software)) flag('text-reads-as-field', 'the weather software type is one letter');
+    if (w.unit !== undefined && (!/^[A-Za-z0-9_-]{2,4}$/.test(w.unit) || /^[0-9]+$/.test(w.unit)))
       flag('text-reads-as-field', 'the weather unit is 2-4 letters, digits, - or _');
     out += (w.software ?? '') + (w.unit ?? '');
   }
@@ -437,13 +462,13 @@ function extensionTexts(f: Pick<PositionedFields, 'phg' | 'rangeMiles' | 'dfs' |
   const out: ExtensionTexts = {};
   if (f.phg) {
     const p = f.phg;
-    out.phg = `PHG${whole(p.power, 0, 9, 'power code')}${heightChar(p.height)}${whole(p.gain, 0, 9, 'gain code')}${whole(p.directivity, 0, 9, 'directivity code')}`;
+    out.phg = `PHG${exact(p.power, 0, 9, 'power code')}${heightChar(p.height)}${exact(p.gain, 0, 9, 'gain code')}${exact(p.directivity, 0, 9, 'directivity code')}`;
     if (p.beaconsPerHour !== undefined) out.phg += rateChar(p.beaconsPerHour) + '/';
   }
   if (f.rangeMiles !== undefined) out.rng = 'RNG' + pad(whole(f.rangeMiles, 0, 9999, 'range'), 4);
   if (f.dfs) {
     const d = f.dfs;
-    out.dfs = `DFS${whole(d.strength, 0, 9, 'strength')}${heightChar(d.height)}${whole(d.gain, 0, 9, 'gain code')}${whole(d.directivity, 0, 9, 'directivity code')}`;
+    out.dfs = `DFS${exact(d.strength, 0, 9, 'strength')}${heightChar(d.height)}${exact(d.gain, 0, 9, 'gain code')}${exact(d.directivity, 0, 9, 'directivity code')}`;
   }
   if (f.area) {
     const a = f.area;
@@ -451,7 +476,7 @@ function extensionTexts(f: Pick<PositionedFields, 'phg' | 'rangeMiles' | 'dfs' |
     const color = AREA_COLORS.indexOf(a.color);
     if (shape < 0 || color < 0) flag('invalid-code', 'unknown area shape or colour');
     const c = color < 10 ? `/${color}` : String(color);
-    out.area = `${shape}${pad(whole(a.latOffset, 0, 99, 'area offset'), 2)}${c}${pad(whole(a.lonOffset, 0, 99, 'area offset'), 2)}`;
+    out.area = `${shape}${pad(exact(a.latOffset, 0, 99, 'area offset'), 2)}${c}${pad(exact(a.lonOffset, 0, 99, 'area offset'), 2)}`;
   }
   return out;
 }
@@ -463,7 +488,7 @@ function courseText(f: PositionedFields): string {
   let out = courseSpeed(f.courseDegrees, f.speedKnots);
   if (f.dfBearing) {
     const b = f.dfBearing;
-    out += `/${pad(whole(b.bearingDegrees, 0, 360, 'bearing'), 3)}/${whole(b.number, 0, 9, 'N')}${whole(b.range, 0, 9, 'R')}${whole(b.quality, 0, 9, 'Q')}`;
+    out += `/${pad(exact(b.bearingDegrees, 0, 360, 'bearing'), 3)}/${exact(b.number, 0, 9, 'N')}${exact(b.range, 0, 9, 'R')}${exact(b.quality, 0, 9, 'Q')}`;
   }
   if (f.storm) out += stormText(f.storm);
   return out;
@@ -563,7 +588,7 @@ function positionedBody(f: PositionedFields, mode: CommentMode): Body {
   }
   if (f.area?.corridorWidthMiles !== undefined) {
     if (f.area.shape !== 'line-down-right' && f.area.shape !== 'line-down-left') flag('field-not-allowed', 'only a line has a corridor');
-    braces = `{${whole(f.area.corridorWidthMiles, 0, 999, 'corridor width')}}`;
+    braces = `{${exact(f.area.corridorWidthMiles, 0, 999, 'corridor width')}}`;
   }
   text += braces;
   // With a GGA compression type the altitude belongs in the cs bytes; a course or range that wants
@@ -593,7 +618,7 @@ function stormText(s: NonNullable<PositionedFields['storm']>): string {
   const type = s.type === 'tropical-storm' ? 'TS' : s.type === 'hurricane' ? 'HC' : s.type === 'tropical-depression' ? 'TD' : refuse('invalid-code', 'unknown storm type');
   // Each field is digits: one with no value has no form (vectors README, storm data).
   const v = (n: number | undefined, width: number, what: string): string =>
-    n === undefined ? refuse('missing-field', `storm data needs its ${what}`) : pad(whole(n, 0, 10 ** width - 1, what), width);
+    n === undefined ? refuse('missing-field', `storm data needs its ${what}`) : pad(exact(n, 0, 10 ** width - 1, what), width);
   let out = `/${type}/${v(s.sustainedWindKnots, 3, 'sustained wind')}^${v(s.gustKnots, 3, 'gust')}/${v(s.centralPressureMbar, 4, 'pressure')}>${v(s.hurricaneRadiusNm, 3, 'radius')}&${v(s.tropicalStormRadiusNm, 3, 'radius')}`;
   if (s.wholeGaleRadiusNm !== undefined) out += `%${v(s.wholeGaleRadiusNm, 3, 'radius')}`;
   return out;
@@ -753,7 +778,7 @@ function micEDestination(d: MicEReport, lat: Digits, lonDegrees: number): string
     else out += blanked ? 'L' : String.fromCharCode(48 + digit);
   }
   if (d.destinationSsid !== undefined && d.destinationSsid !== 0) {
-    out += '-' + whole(d.destinationSsid, 0, 15, 'destination SSID');
+    out += '-' + exact(d.destinationSsid, 0, 15, 'destination SSID');
   }
   return out;
 }
@@ -782,6 +807,27 @@ function micEAltitudeInText(feet: number): boolean {
   return !exactInBytes;
 }
 
+/** Whether a `/A=` holds an altitude exactly: a whole number of feet within six digits. */
+function micEAltitudeInAltitude(feet: number): boolean {
+  return Number.isFinite(feet) && nearlyWhole(feet) && Math.round(feet) >= -99999 && Math.round(feet) <= 999999;
+}
+
+/**
+ * The form of a Mic-E altitude written first: the `/A=` it came from, or one only a `/A=` holds
+ * exactly; otherwise the Mic-E bytes. A builder asks for the bytes first (`bytesFirst`, passed to
+ * the encoder and kept on no object).
+ */
+function micEAltitudeForm(d: MicEReport, bytesFirst: boolean): 'bytes' | 'text' {
+  if (d.altitudeInComment) return 'text';
+  return !bytesFirst && d.altitudeFeet !== undefined && Number.isFinite(d.altitudeFeet) && micEAltitudeInText(d.altitudeFeet) ? 'text' : 'bytes';
+}
+
+/** Whether a `/A=` is the next form for this Mic-E data: its altitude is written in the bytes first and a `/A=` holds it exactly. */
+export function micEAltitudeHasNextForm(d: MicEReport, bytesFirst: boolean): boolean {
+  const feet = d.altitudeFeet;
+  return feet !== undefined && !d.altitudeInComment && micEAltitudeForm(d, bytesFirst) === 'bytes' && micEAltitudeInAltitude(feet);
+}
+
 /** The Mic-E altitude bytes for an altitude in feet, rounded once to the metre; one outside their range is refused. */
 function micEAltitudeBytes(feet: number): string {
   const metres = nearest(feet * METRES_PER_FOOT);
@@ -793,7 +839,7 @@ function micEAltitudeBytes(feet: number): string {
 }
 
 /** A Mic-E report: the information field and the destination address. */
-export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; destination: string } {
+export function encodeMicE(d: MicEReport, mode: CommentMode, altitudeForm?: 'bytes' | 'text', bytesFirst = false): { text: string; destination: string } {
   if (d.compressed || d.compression) flag('field-not-allowed', 'a Mic-E report is not compressed');
   if (!(d.latitude >= -90 && d.latitude <= 90)) flag(numberFault(d.latitude), `latitude ${d.latitude} is out of range`);
   if (!(d.longitude >= -180 && d.longitude <= 180)) flag(numberFault(d.longitude), `longitude ${d.longitude} is out of range`);
@@ -858,16 +904,19 @@ export function encodeMicE(d: MicEReport, mode: CommentMode): { text: string; de
   let altitudeInComment: number | undefined;
   if (d.altitudeFeet !== undefined) {
     if (!Number.isFinite(d.altitudeFeet)) flag('not-a-number', 'altitude is not a number');
-    // A builder always sends the Mic-E bytes; decoded data written back keeps the `/A=` it came from.
-    const inText = d.altitudeInComment || (!micEAltitudeBytesOnly(d) && Number.isFinite(d.altitudeFeet) && micEAltitudeInText(d.altitudeFeet));
-    if (inText) altitudeInComment = d.altitudeFeet;
+    // A builder asks for the Mic-E bytes first; decoded data written back keeps the `/A=` it came from.
+    const form = altitudeForm ?? micEAltitudeForm(d, bytesFirst);
+    if (form === 'text') {
+      if (!d.altitudeInComment && !micEAltitudeInAltitude(d.altitudeFeet)) flag('value-has-no-form', 'a /A= does not hold this Mic-E altitude exactly');
+      altitudeInComment = d.altitudeFeet;
+    }
     else if (Number.isFinite(d.altitudeFeet)) {
       const alt = micEAltitudeBytes(d.altitudeFeet);
       // With no type code the first altitude byte would be read as one: the Mic-E bytes have no
       // clean form, so a `/A=` takes the altitude when it holds it exactly, else it has no form.
       if (alt.length > 0 && d.typeCode === undefined && text.length === 0 && '`\'>] '.includes(alt[0]!)) {
         const feet = d.altitudeFeet;
-        if (!micEAltitudeBytesOnly(d) && nearlyWhole(feet) && Math.round(feet) >= -99999 && Math.round(feet) <= 999999) altitudeInComment = feet;
+        if (micEAltitudeInAltitude(feet)) altitudeInComment = feet;
         else flag('value-has-no-form', 'a Mic-E altitude whose first byte is a type code character has no form');
       } else text += alt;
     }

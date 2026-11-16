@@ -145,7 +145,8 @@ function weatherN(w: Weather): Neutral {
 function positionedN(o: Neutral, d: PositionedFields): void {
   o.latitude = d.latitude;
   o.longitude = d.longitude;
-  put(o, 'ambiguity', d.ambiguity);
+  // An ambiguity of 0 is none: absent in the data form.
+  put(o, 'ambiguity', d.ambiguity === 0 ? undefined : d.ambiguity);
   o.symbol = sym(d.symbol);
   put(o, 'compressed', d.compressed);
   if (d.compression) o.compression = compressionN(d.compression);
@@ -201,7 +202,8 @@ function toNeutralLevel(d: AprsData): Neutral {
       put(o, 'device_suffix', d.deviceSuffix);
       put(o, 'locator', d.locator);
       if (d.legacyTelemetry && d.legacyTelemetry.length > 0) o.legacy_telemetry = [...d.legacyTelemetry];
-      put(o, 'destination_ssid', d.destinationSsid);
+      // An SSID of 0 is no suffix: absent in the data form.
+      put(o, 'destination_ssid', d.destinationSsid === 0 ? undefined : d.destinationSsid);
       positionedN(o, d);
       break;
     case 'object':
@@ -375,8 +377,22 @@ function timestampFrom(text: unknown): AprsTimestamp {
   return t;
 }
 
-function opt<T>(o: Record<string, unknown>, key: string, value: T | undefined): void {
-  if (value !== undefined) o[key] = value;
+function opt<T>(o: Record<string, unknown>, key: string, value: T | undefined | null): void {
+  if (value !== undefined && value !== null) o[key] = value;
+}
+
+/**
+ * A copy of neutral data in which a `null` or `false` object value is absent, as the data form
+ * has it (a field is left out, and a boolean is written only when true). A list item is a value,
+ * so a `null` in a list stays. The copy stops at a depth no data form reaches.
+ */
+function withoutAbsent(v: unknown, depth = 0): unknown {
+  if (depth > 32) return v;
+  if (Array.isArray(v)) return v.map((x) => withoutAbsent(x, depth + 1));
+  if (typeof v !== 'object' || v === null) return v;
+  const out: J = {};
+  for (const [k, x] of Object.entries(v)) if (x !== null && x !== false) out[k] = withoutAbsent(x, depth + 1);
+  return out;
 }
 
 function weatherFrom(w: J): Weather {
@@ -470,7 +486,7 @@ export function fromNeutralData(d: J): AprsData {
     chain.push(p);
     level = p.data ?? { type: 'unrecognized', reason: 'empty' };
   }
-  let o = fromNeutralLevel(level);
+  let o = fromNeutralLevel(withoutAbsent(level) as J);
   for (let i = chain.length - 1; i >= 0; i--) {
     const p = chain[i]!;
     // The inner packet as data: its information field is written from its data, and its

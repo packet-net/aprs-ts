@@ -62,7 +62,7 @@ export function parseTnc2Header(line: Uint8Array, options: ParseOptions): Parsed
     const colon = line.indexOf(0x3a);
     if (colon < 0) fail(diags, 'invalid-header');
     const header = bytesToBinary(line, 0, colon);
-    const info = line.slice(colon + 1);
+    const info = new Uint8Array(line.subarray(colon + 1)); // a copy: Buffer#slice is a view
     const parsed = parseHeaderText(header, options, diags);
     return { ...parsed, info, diagnostics: diags };
   } catch (e) {
@@ -113,6 +113,23 @@ export function parseHeaderText(
   return { source, destination, path: markUsed(raw) };
 }
 
+/**
+ * Reads a header as written (`SOURCE>DEST,PATH`, no colon) back, as a user's decode of a line
+ * carrying it reads it: the outer header rules, whatever the packet's origin, so a third-party
+ * packet's inner source `a b` is not an address here. `undefined` if it is unusable or would end at
+ * a colon.
+ */
+export function readHeaderText(header: string, options: ParseOptions): { source: string; destination: string; path: PathEntry[]; diagnostics: Diagnostic[] } | undefined {
+  if (header.includes(':')) return undefined;
+  const diags: Diagnostic[] = [];
+  try {
+    return { ...parseHeaderText(header, options, diags), diagnostics: diags };
+  } catch (e) {
+    if (e instanceof HeaderRejected) return undefined;
+    throw e;
+  }
+}
+
 function markUsed(raw: readonly { address: string; marked: boolean }[]): PathEntry[] {
   let last = -1;
   raw.forEach((e, i) => {
@@ -121,7 +138,7 @@ function markUsed(raw: readonly { address: string; marked: boolean }[]): PathEnt
   return raw.map((e, i) => ({ address: e.address, used: i <= last }));
 }
 
-/** Formats a path as TNC2 text: only the last used entry is marked with `*`. */
+/** Formats a path as TNC2 text: only the last used entry is marked with `*`. Display only, as `formatTnc2Header`: nothing is checked. */
 export function formatPath(path: readonly PathEntry[]): string {
   let last = -1;
   path.forEach((e, i) => {
@@ -130,7 +147,13 @@ export function formatPath(path: readonly PathEntry[]): string {
   return path.map((e, i) => (i === last ? `${e.address}*` : e.address)).join(',');
 }
 
-/** Formats a header as TNC2 text, without the colon. */
+/**
+ * Formats a header as TNC2 text, without the colon (`*` on the last used entry only). This is for
+ * display and for building text, not a writer: it checks nothing and never refuses, so what it
+ * gives may be a header no decoder reads back (an address APRS-IS does not allow, a path entry not
+ * marked used before one that is). To write a line to send, use `encodeTnc2`, `packetToTnc2` or a
+ * built packet's `toTnc2`, which judge the header and read it back.
+ */
 export function formatTnc2Header(source: string, destination: string, path: readonly PathEntry[]): string {
   return path.length === 0 ? `${source}>${destination}` : `${source}>${destination},${formatPath(path)}`;
 }
@@ -226,7 +249,7 @@ export function parseAx25Frame(frame: Uint8Array, options: ParseOptions): Parsed
       source: src!.text,
       destination: dest!.text,
       path,
-      info: frame.slice(offset + 2),
+      info: new Uint8Array(frame.subarray(offset + 2)), // a copy: Buffer#slice is a view
       diagnostics: diags,
     };
   } catch (e) {

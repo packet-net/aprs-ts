@@ -25,13 +25,14 @@ export function refuse(code: RefusalCode, reason: string): never {
 
 /**
  * The order in which several faults in one packet are reported: the first code that applies wins
- * (vectors refusals: DESIGN rulings, R1). The header comes first, a field wrong on its own is
- * wrong whatever else is given, then what the frame cannot hold, then the companions, and the
- * read-back safety nets last.
+ * (vectors README, Refusal reasons). A header given that no form can be (an address that is not
+ * one, a path no line or frame reads back) comes first, a field wrong on its own is wrong whatever
+ * else is given, then what the report has no place for, then the companions, the read-back safety
+ * nets, the size, and last what the form written cannot carry (a call or a line break).
  */
 const REFUSAL_ORDER: readonly RefusalCode[] = [
   'not-encodable',
-  'invalid-address', 'ax25-cannot-carry', 'tnc2-cannot-carry', 'invalid-third-party-header',
+  'invalid-address', 'invalid-path', 'invalid-third-party-header',
   'invalid-addressee', 'invalid-name', 'invalid-timestamp', 'not-a-number', 'value-out-of-range',
   'value-has-no-form', 'invalid-code', 'invalid-symbol', 'invalid-character', 'too-long',
   'padding-space', 'malformed', 'invalid-message-id', 'invalid-nmea',
@@ -39,6 +40,7 @@ const REFUSAL_ORDER: readonly RefusalCode[] = [
   'text-reads-as-field',
   'does-not-read-back',
   'information-field-too-long',
+  'ax25-cannot-carry', 'tnc2-cannot-carry',
 ];
 
 /** Where a code sits in the reporting order; a code outside it comes last. */
@@ -72,29 +74,47 @@ export function givenTwiceReason(data: object): string | undefined {
   return givenTwice.get(data);
 }
 
-const micEAltitudeBytes = new WeakSet<object>();
+const emptyMessageIds = new WeakSet<object>();
 
-/** Marks Mic-E data whose altitude a builder rounded to the metre: it goes in the Mic-E altitude bytes, never a `/A=`. */
-export function markMicEAltitudeBytesOnly<T extends object>(data: T): T {
-  micEAltitudeBytes.add(data);
+/** Marks message data a builder was given an empty message ID for: a builder's empty ID is refused, where neutral data's is no ID. */
+export function markEmptyMessageId<T extends object>(data: T): T {
+  emptyMessageIds.add(data);
   return data;
 }
 
-/** Whether Mic-E data was marked to send its altitude in the Mic-E altitude bytes only. */
-export function micEAltitudeBytesOnly(data: object): boolean {
-  return micEAltitudeBytes.has(data);
+/** Whether message data was marked as given an empty message ID by a builder. */
+export function hasEmptyMessageId(data: object): boolean {
+  return emptyMessageIds.has(data);
 }
 
-let faults: AprsEncodeError[] | undefined;
+/** A fault noted while the rest of the data is checked: just a code and a reason, not yet an error with a stack. */
+interface Fault {
+  readonly code: RefusalCode;
+  readonly message: string;
+}
+
+let faults: Fault[] | undefined;
+let lateFaults: Fault[] | undefined;
+
+/**
+ * Notes a fault found only by reading the written field back under its header (inner Mic-E data whose
+ * inner destination is not the one it computes): reported only when no rule check found a fault, so
+ * every other refusal comes first whatever its place in the order.
+ */
+export function flagLate(code: RefusalCode, reason: string): void {
+  if (lateFaults === undefined) throw new AprsEncodeError(reason, code);
+  lateFaults.push({ code, message: reason });
+}
 
 /**
  * Notes a fault and carries on, so that every fault in the data is found and the one that comes
- * first in the reporting order is the one reported. Outside `collect` it refuses at once.
+ * first in the reporting order is the one reported. Outside `collect` it refuses at once. A fault
+ * noted is a plain record: an error (with the stack it captures) is made only for the one reported,
+ * so data with thousands of faults costs no more than data with one.
  */
 export function flag(code: RefusalCode, reason: string): void {
-  const e = new AprsEncodeError(reason, code);
-  if (faults === undefined) throw e;
-  faults.push(e);
+  if (faults === undefined) throw new AprsEncodeError(reason, code);
+  faults.push({ code, message: reason });
 }
 
 /**
@@ -103,23 +123,31 @@ export function flag(code: RefusalCode, reason: string): void {
  */
 export function collect<T>(step: () => T): T {
   const outer = faults;
-  const mine: AprsEncodeError[] = [];
+  const outerLate = lateFaults;
+  const mine: Fault[] = [];
+  const late: Fault[] = [];
   faults = mine;
+  lateFaults = late;
   let result: T | undefined;
   let other: unknown;
   let failed = false;
   try {
     result = step();
   } catch (e) {
-    if (e instanceof AprsEncodeError) mine.push(e);
+    if (e instanceof AprsEncodeError) mine.push({ code: e.code, message: e.message });
     else {
       failed = true;
       other = e;
     }
   } finally {
     faults = outer;
+    lateFaults = outerLate;
   }
-  if (mine.length > 0) throw firstRefusal(mine);
+  if (mine.length === 0 && late.length > 0 && !failed) mine.push(late[0]!);
+  if (mine.length > 0) {
+    const first = firstRefusal(mine);
+    throw new AprsEncodeError(first.message, first.code);
+  }
   if (failed) throw other;
   return result as T;
 }
@@ -158,6 +186,19 @@ export function whole(
   if (n === noForm) flag('value-has-no-form', `${what} ${value} is out of range (${min}-${max})`);
   else if (n < min || n > max) flag(outside, `${what} ${value} is out of range (${min}-${max})`);
   return n;
+}
+
+/**
+ * A whole number within [min, max], else refused, for a field the form holds only in whole units or
+ * as a code (a PHG or DFS digit, an Agrelo quality, a comment telemetry sequence): a fraction there is
+ * outside what the field holds, `value-out-of-range`, never rounded. Rounding is for the step fields
+ * the Encoding rule lists, and `whole` does that.
+ */
+export function exact(value: number, min: number, max: number, what: string): number {
+  if (!Number.isFinite(value)) flag('not-a-number', `${what} is not a number`);
+  else if (!Number.isInteger(value)) flag('value-out-of-range', `${what} ${value} is not a whole number`);
+  else if (value < min || value > max) flag('value-out-of-range', `${what} ${value} is out of range (${min}-${max})`);
+  return value;
 }
 
 /**
