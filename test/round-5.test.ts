@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   Aprs,
   AprsEncodeError,
+  decodeAx25,
   decodeTnc2,
   encodeAx25,
   encodeInformation,
