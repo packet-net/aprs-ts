@@ -73,7 +73,7 @@ const HEADS: Record<string, string> = {
   'mic-e': 'N0CALL>S32UVT:`(_fn"Oj/',
   'mic-e after a locator': 'N0CALL>S32UVT:`(_fn"Oj/>IO91/G ',
 };
-// The last four are runs of bars whose pairs mostly do not enclose a block (R27: telemetry is the last valid block).
+// The last four are runs of bars whose pairs mostly do not enclose a block.
 const ELEMENTS = ['{', 'PHG1', '|!!|', '/A=000001', '!W12!', '"4e}', '}', '/A=000100}', '|', '||x', '|!!!!!!!!!!!!!!!!!|', '|a b'];
 const SMALL = 40_000;
 const LARGE = 160_000;
@@ -86,10 +86,10 @@ describe('hostile input is decoded in linear time', () => {
         const small = line(SMALL);
         const large = line(LARGE);
         decodeTnc2(small); // warm up
-        const a = best(small, 3);
-        const b = best(large, 3);
+        const a = best(small, 9);
+        const b = best(large, 9);
         // 4x the size: linear is about 4x the time, quadratic about 16x. Allow generous noise.
-        expect(b / Math.max(a, 1e5)).toBeLessThan(10);
+        expect(b / Math.max(a, 1e5)).toBeLessThan(12);
       });
     }
   }

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Vectors pinned at 72583b4 (aprs-vectors, branch `round-5`). Every case passes with no skips.
+Vectors pinned at abe1b50 (aprs-vectors, branch `round-5`). Every case passes with no skips.
 
 ### Decoder
 
