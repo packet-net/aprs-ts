@@ -615,3 +615,24 @@ describe('inner Mic-E data under a destination it does not compute is found by t
     expect(code(() => encodeInformation(inner('APRS', [])))).toBe('not-encodable');
   });
 });
+
+describe('a defect of one entry is listed once for each occurrence, a judgement about a whole once', () => {
+  const codes = (p: AprsPacket) => p.diagnostics.map((d) => d.code);
+  it('lists a per-address or per-entry defect for each occurrence', () => {
+    expect(codes(decodeTnc2('N0CALL>APZ001,,,A:>x')).filter((c) => c === 'empty-path-entry')).toHaveLength(2);
+    const addr = (s: string, last: boolean, nul = false) => {
+      const b: number[] = [];
+      for (let i = 0; i < 6; i++) b.push((i < s.length ? s.charCodeAt(i) : nul ? 0 : 0x20) << 1);
+      b.push(0x60 | (last ? 1 : 0));
+      return b;
+    };
+    const frame = Uint8Array.from([...addr('APZ', false, true), ...addr('abc', false, true), ...addr('wide', false), ...addr('xyz', true), 3, 0xf0, 0x3e, 0x78]);
+    const found = codes(decodeAx25(frame));
+    expect(found.filter((c) => c === 'nul-padded-address')).toHaveLength(2);
+    expect(found.filter((c) => c === 'invalid-ax25-address-characters')).toHaveLength(3);
+  });
+  it('lists a judgement about a whole once', () => {
+    expect(codes(decodeTnc2('N0CALL>APZ001:>x\u0001y\u0002')).filter((c) => c === 'control-character-in-text')).toHaveLength(1);
+    expect(codes(decodeTnc2('N0CALL>APZ001,A*,B*,C*:>x')).filter((c) => c === 'multiple-used-markers')).toHaveLength(1);
+  });
+});
