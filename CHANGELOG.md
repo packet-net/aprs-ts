@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 (2026-11-16)
 
-Vectors pinned at abe1b50 (aprs-vectors, branch `round-5`). Every case passes with no skips.
+Vectors pinned at 26dd1dd (aprs-vectors, branch `round-5`). Every case passes with no skips.
 
 ### Decoder
 
