@@ -94,6 +94,17 @@ interface Fault {
 }
 
 let faults: Fault[] | undefined;
+let lateFaults: Fault[] | undefined;
+
+/**
+ * Notes a fault found only by reading the written field back under its header (inner Mic-E data whose
+ * inner destination is not the one it computes): reported only when no rule check found a fault, so
+ * every other refusal comes first whatever its place in the order.
+ */
+export function flagLate(code: RefusalCode, reason: string): void {
+  if (lateFaults === undefined) throw new AprsEncodeError(reason, code);
+  lateFaults.push({ code, message: reason });
+}
 
 /**
  * Notes a fault and carries on, so that every fault in the data is found and the one that comes
@@ -112,8 +123,11 @@ export function flag(code: RefusalCode, reason: string): void {
  */
 export function collect<T>(step: () => T): T {
   const outer = faults;
+  const outerLate = lateFaults;
   const mine: Fault[] = [];
+  const late: Fault[] = [];
   faults = mine;
+  lateFaults = late;
   let result: T | undefined;
   let other: unknown;
   let failed = false;
@@ -127,7 +141,9 @@ export function collect<T>(step: () => T): T {
     }
   } finally {
     faults = outer;
+    lateFaults = outerLate;
   }
+  if (mine.length === 0 && late.length > 0 && !failed) mine.push(late[0]!);
   if (mine.length > 0) {
     const first = firstRefusal(mine);
     throw new AprsEncodeError(first.message, first.code);

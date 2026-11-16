@@ -9,7 +9,7 @@ import { binaryToBytes, bytesToBinary, decodeUtf8 } from '../bytes.js';
 import { formatDiagnostic, ParseOptions, type Diagnostic } from '../diagnostics.js';
 import { AprsHeaderError, formatTnc2Header, isAprsIsAddress, parseAx25Frame, readHeaderText, type ParsedHeader } from '../header.js';
 import type { AprsData, CompressionType, PathEntry } from '../types.js';
-import { AprsEncodeError, collect, flag, givenTwiceReason, DEFAULT_DESTINATION, firstRefusal, refuse } from './common.js';
+import { AprsEncodeError, collect, flag, givenTwiceReason, flagLate, DEFAULT_DESTINATION, firstRefusal, refuse } from './common.js';
 import {
   encodeAck,
   encodeAgrelo,
@@ -32,6 +32,7 @@ import {
   encodeUserDefined,
 } from './other.js';
 import { decodeInformation } from '../decode/index.js';
+import { toNeutralData } from '../neutral.js';
 import { readBack, sameData } from './readback.js';
 import { checkShape, guarded, pendingShapeFaults, strayFields } from './shape.js';
 import { encodeItem, encodeMicE, encodeObject, micEAltitudeHasNextForm, encodePositionReport, encodeWeatherReport, type CommentMode } from './position.js';
@@ -175,13 +176,12 @@ function attemptOnce(data: AprsData, mode: CommentMode, options: WriteOptions, a
       // put in the place of the one given).
       let info: Uint8Array;
       if (asReceived) {
-        // (A deeper third-party packet is read to the depth the decoder allows from here, and is judged at its own level.)
-        if (inner.type !== 'third-party') checkReadsAsHeld(original, data.packet.destination, inner);
+        if (!readsAsHeld(original, data.packet.destination, inner)) flagLate('not-encodable', `the inner information field would read as other data under the destination ${JSON.stringify(data.packet.destination)}`);
         info = original;
       } else {
         const encoded = encodeInformation(inner);
         if (encoded.destination !== undefined && encoded.destination !== data.packet.destination)
-          flag('not-encodable', `inner Mic-E data computes the destination ${encoded.destination}, not ${JSON.stringify(data.packet.destination)}`);
+          flagLate('not-encodable', `inner Mic-E data computes the destination ${encoded.destination}, not ${JSON.stringify(data.packet.destination)}`);
         info = encoded.information;
       }
       return { binary: encodeThirdParty(data, bytesToBinary(info)) };
@@ -204,8 +204,18 @@ function attemptOnce(data: AprsData, mode: CommentMode, options: WriteOptions, a
  * position, and a Mic-E report under a plain destination loses half of its position.
  */
 export function readsAsHeld(information: Uint8Array, destination: string, data: AprsData): boolean {
+  // A header changes a reading only through a Mic-E destination, so only a field that starts with a Mic-E
+  // data type identifier (` ' 0x1C 0x1D), or is held as a Mic-E report, can read differently under it. Every other
+  // field (a third-party packet cut out of a deep nest included) is written as received.
+  const first = information[0];
+  if (data.type !== 'mic-e' && first !== 0x60 && first !== 0x27 && first !== 0x1c && first !== 0x1d) return true;
   const read = decodeInformation(information, destination, ParseOptions.lenient).data;
-  return read.type === data.type && sameData(data, read);
+  if (read.type !== data.type) return false;
+  // Data decoded from these bytes reads back exactly as held, whatever form the report is in (a
+  // compressed report's range or wind in whole units in its comment is not rounded to cs steps).
+  if (JSON.stringify(toNeutralData(read)) === JSON.stringify(toNeutralData(data))) return true;
+  // Data a program made (a Mic-E report whose latitude lies between steps) reads back by the read-back's own allowances.
+  return data.type === 'mic-e' && sameData(data, read);
 }
 
 /** Refuses (`not-encodable`) a held information field that reads as other data under the destination it is written with. */

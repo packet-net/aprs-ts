@@ -569,3 +569,49 @@ describe('a held Mic-E report written under another Mic-E destination', () => {
     expect(code(() => packetToTnc2({ ...held, destination: 'S32U6T-0' }))).toBe('written');
   });
 });
+
+describe('a held packet that reads back as held is written as received', () => {
+  const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+
+  it('writes a compressed report with a range or wind in whole units in its comment', () => {
+    const lines: [string, string][] = [
+      ['N0CALL>APZ001:!/5L!!<*e7>  CRNG0034', '82a0b4606062e09c60868298986103f0212f354c21213c2a65373e202043524e4730303334'],
+      ['N0CALL>APZ001:!/0L!!<*e7_ !G358/005g010t070', '82a0b4606062e09c60868298986103f0212f304c21213c2a65375f2021473335382f3030356730313074303730'],
+    ];
+    for (const [line, frame] of lines) {
+      const held = decodeTnc2(encodeUtf8(line));
+      expect(packetToTnc2(held)).toBe(line);
+      expect(hex(packetToAx25(held))).toBe(frame);
+    }
+  });
+  it('refuses a q-construct in the path as ax25-cannot-carry, not as another reading', () => {
+    const line = 'KD8ZLZ-13>APDW18,WIDE2-1,qAR,N8HKU-5:!/91p09Apr_ C 103/000g002t068r000p000P000h48b10268L153';
+    const held = decodeTnc2(encodeUtf8(line));
+    expect(packetToTnc2(held)).toBe(line);
+    expect(code(() => packetToAx25(held))).toBe('ax25-cannot-carry');
+  });
+  it('writes every inner packet of a nest five deep as received', () => {
+    const outer = decodeTnc2(encodeUtf8('N0CALL>APZ001:}A>B:}A>B:}A>B:}A>B:}A>B:>hi'));
+    let level: AprsPacket = outer;
+    const lines: string[] = [];
+    while (level.data.type === 'third-party') {
+      level = level.data.packet;
+      lines.push(packetToTnc2(level));
+    }
+    expect(lines).toEqual(['A>B:}A>B:}A>B:}A>B:}A>B:>hi', 'A>B:}A>B:}A>B:}A>B:>hi', 'A>B:}A>B:}A>B:>hi', 'A>B:}A>B:>hi']);
+    expect(hex(packetToAx25(outer.data.type === 'third-party' ? outer.data.packet : outer))).toBe('844040404040e08240404040406103f07d413e423a7d413e423a7d413e423a7d413e423a3e6869');
+  });
+});
+
+describe('inner Mic-E data under a destination it does not compute is found by the read-back, after every rule check', () => {
+  const mice = { type: 'mic-e', micEMessage: 'returning', latitude: 33.4, longitude: -12.129, symbol: { table: '/', code: 'j' }, courseDegrees: 251, speedKnots: 20 };
+  const inner = (destination: string, path: { address: string; used: boolean }[], data: object = mice) =>
+    ({ type: 'third-party', packet: { source: 'N0CALL', destination, path, information: new Uint8Array(0), data, diagnostics: [] } }) as unknown as AprsData;
+  const bad = [{ address: 'W1', used: false }, { address: 'W2', used: true }];
+
+  it('lets an inner header fault or a data fault come first, and is not-encodable otherwise', () => {
+    expect(code(() => encodeInformation(inner('APRS', bad)))).toBe('invalid-third-party-header');
+    expect(code(() => encodeInformation(inner('APRS', [], { ...mice, latitude: 500 })))).toBe('value-out-of-range');
+    expect(code(() => encodeInformation(inner('APRS', [])))).toBe('not-encodable');
+  });
+});
