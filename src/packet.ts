@@ -22,7 +22,8 @@ export function hasWarnings(packet: AprsPacket): boolean {
  * field over 256 bytes is written as it came), but the header written is read back like any
  * other.
  *
- * @throws AprsEncodeError: `not-encodable` when the information field reads as other data under the destination written (a held
+ * @throws AprsEncodeError: `not-encodable` when the held data and the information field disagree, that is when the field reads as
+ * other data under the destination written (a changed latitude or text, an inner packet re-addressed at any depth, a held
  * packet re-addressed to or from a Mic-E destination), `invalid-address` or `invalid-path` for a header no form can carry (a
  * packet read from inside a third-party packet is held to the outer address rule, so an inner
  * source such as `a b` is refused), and `tnc2-cannot-carry` when the header reads back as another

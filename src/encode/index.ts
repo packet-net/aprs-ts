@@ -176,7 +176,7 @@ function attemptOnce(data: AprsData, mode: CommentMode, options: WriteOptions, a
       // put in the place of the one given).
       let info: Uint8Array;
       if (asReceived) {
-        if (!readsAsHeld(original, data.packet.destination, inner)) flagLate('not-encodable', `the inner information field would read as other data under the destination ${JSON.stringify(data.packet.destination)}`);
+        if (!readsAsHeld(original, data.packet.destination, inner)) flagLate('not-encodable', `the inner data and the inner information field disagree: the field would read as other data under the destination ${JSON.stringify(data.packet.destination)}`);
         info = original;
       } else {
         const encoded = encodeInformation(inner);
@@ -199,28 +199,44 @@ function attemptOnce(data: AprsData, mode: CommentMode, options: WriteOptions, a
 
 /**
  * Whether an information field, read under the destination it is written with, reads as the data
- * it is held with. Only a Mic-E destination changes a reading, so this is what refuses a held
- * packet re-addressed to or from one: bytes shaped like Mic-E under a Mic-E destination read as a
- * position, and a Mic-E report under a plain destination loses half of its position.
+ * it is held with, for every kind of data. This refuses a held packet whose data, header or
+ * information bytes no longer agree: a position whose latitude was changed, status text changed, an
+ * inner packet re-addressed at any depth, or a Mic-E packet re-addressed to or from a Mic-E destination.
  */
-export function readsAsHeld(information: Uint8Array, destination: string, data: AprsData): boolean {
-  // A header changes a reading only through a Mic-E destination, so only a field that starts with a Mic-E
-  // data type identifier (` ' 0x1C 0x1D), or is held as a Mic-E report, can read differently under it. Every other
-  // field (a third-party packet cut out of a deep nest included) is written as received.
-  const first = information[0];
-  if (data.type !== 'mic-e' && first !== 0x60 && first !== 0x27 && first !== 0x1c && first !== 0x1d) return true;
-  const read = decodeInformation(information, destination, ParseOptions.lenient).data;
-  if (read.type !== data.type) return false;
+export function readsAsHeld(information: Uint8Array, destinationWritten: string, heldData: AprsData): boolean {
+  // The innermost level of a nest five or more deep is held as unrecognized for the unread fifth `}`:
+  // on its own the field starts a third-party packet and reads as more than was held.
+  if (heldData.type === 'unrecognized' && heldData.reason === 'malformed' && information[0] === 0x7d) return true;
+  const decoded = decodeInformation(information, destinationWritten, ParseOptions.lenient).data;
+  if (decoded.type !== heldData.type) return false;
+  const [data, read] = withoutUnreadLevel(heldData, decoded);
   // Data decoded from these bytes reads back exactly as held, whatever form the report is in (a
   // compressed report's range or wind in whole units in its comment is not rounded to cs steps).
   if (JSON.stringify(toNeutralData(read)) === JSON.stringify(toNeutralData(data))) return true;
   // Data a program made (a Mic-E report whose latitude lies between steps) reads back by the read-back's own allowances.
-  return data.type === 'mic-e' && sameData(data, read);
+  return sameData(data, read);
+}
+
+/**
+ * A held level that is `unrecognized` for an unread fifth `}` matches whatever the field decodes to
+ * there on its own (the inner packet of a nest five or more deep, written on its own): that level's
+ * data and diagnostics are left out of both sides.
+ */
+function withoutUnreadLevel(held: AprsData, read: AprsData): [AprsData, AprsData] {
+  if (held.type !== 'third-party' || read.type !== 'third-party') return [held, read];
+  const h = held.packet;
+  const r = read.packet;
+  if (h.data.type === 'unrecognized' && h.data.reason === 'malformed' && h.diagnostics.some((d) => d.severity === 'error' && d.code === 'invalid-third-party')) {
+    const blank = { data: { type: 'unrecognized', reason: 'malformed' } as AprsData, diagnostics: [] };
+    return [{ ...held, packet: { ...h, ...blank } }, { ...read, packet: { ...r, ...blank } }];
+  }
+  const [hd, rd] = withoutUnreadLevel(h.data, r.data);
+  return hd === h.data && rd === r.data ? [held, read] : [{ ...held, packet: { ...h, data: hd } }, { ...read, packet: { ...r, data: rd } }];
 }
 
 /** Refuses (`not-encodable`) a held information field that reads as other data under the destination it is written with. */
 export function checkReadsAsHeld(information: Uint8Array, destination: string, data: AprsData): void {
-  if (!readsAsHeld(information, destination, data)) refuse('not-encodable', `the information field would read as other data under the destination ${JSON.stringify(destination)}`);
+  if (!readsAsHeld(information, destination, data)) refuse('not-encodable', `the data and the information field disagree: the field would read as other data under the destination ${JSON.stringify(destination)}`);
 }
 
 /**
@@ -408,7 +424,7 @@ export function tnc2TextOf(bytes: Uint8Array): string {
  */
 export function encodeTnc2Bytes(p: PacketToEncode): Uint8Array {
   return guarded(() => {
-    // An address APRS-IS does not allow comes first; a header the line cannot carry after the data (R25).
+    // An address APRS-IS does not allow comes first; a header the line cannot carry after the data.
     checkHeaderAddresses(p.source, givenDestination(p), p.path ?? []);
     const r = resolve(p);
     checkHeaderAddresses(p.source, r.destination, r.path);
@@ -475,7 +491,7 @@ export function ax25Of(source: string, destination: string, path: readonly (stri
  */
 export function encodeAx25(p: PacketToEncode): Uint8Array {
   return guarded(() => {
-    // An address APRS-IS does not allow comes first; a header the frame cannot carry after the data (R25).
+    // An address APRS-IS does not allow comes first; a header the frame cannot carry after the data.
     checkHeaderAddresses(p.source, givenDestination(p), p.path ?? []);
     const r = resolve(p);
     return ax25Of(p.source, r.destination, r.path, r.information);

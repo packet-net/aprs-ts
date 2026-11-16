@@ -114,7 +114,8 @@ function checkFields(o: Record<string, unknown>, fields: Readonly<Record<string,
   for (const [k, r] of Object.entries(fields)) {
     const missing = o[k] === undefined;
     if (!missing && isKind(o[k], r.kind)) continue;
-    const code: RefusalCode = missing ? 'missing-field' : 'malformed';
+    // A value that is not a number, whatever it is (a bigint, a string), is not-a-number in a numeric field.
+    const code: RefusalCode = missing ? 'missing-field' : r.kind === 'number' ? 'not-a-number' : 'malformed';
     const reason = missing ? `${what} needs ${k}` : `${what}: ${k} is not a ${r.kind}`;
     if (r.standIn === undefined) refuse(code, reason);
     held.push(new AprsEncodeError(reason, code));
