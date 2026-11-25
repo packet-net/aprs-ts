@@ -9,7 +9,7 @@ import { binaryToBytes, bytesToBinary, decodeUtf8 } from '../bytes.js';
 import { formatDiagnostic, ParseOptions, type Diagnostic } from '../diagnostics.js';
 import { AprsHeaderError, formatTnc2Header, isAprsIsAddress, parseAx25Frame, readHeaderText, type ParsedHeader } from '../header.js';
 import type { AprsData, CompressionType, PathEntry } from '../types.js';
-import { AprsEncodeError, collect, flag, givenTwiceReason, flagLate, DEFAULT_DESTINATION, firstRefusal, refuse } from './common.js';
+import { AprsEncodeError, collect, flag, givenTwiceReason, flagLate, DEFAULT_DESTINATION, firstRefusal, refuse, refusalRank } from './common.js';
 import {
   encodeAck,
   encodeAgrelo,
@@ -179,7 +179,17 @@ function attemptOnce(data: AprsData, mode: CommentMode, options: WriteOptions, a
         if (!readsAsHeld(original, data.packet.destination, inner)) flagLate('not-encodable', `the inner data and the inner information field disagree: the field would read as other data under the destination ${JSON.stringify(data.packet.destination)}`);
         info = original;
       } else {
-        const encoded = encodeInformation(inner);
+        let encoded: EncodedInformation;
+        try {
+          encoded = encodeInformation(inner);
+        } catch (e) {
+          // Past every rule check, Mic-E data under a destination it does not compute is
+          // not-encodable, which the Refusal reasons order puts before what the read-back found.
+          if (!(e instanceof AprsEncodeError) || inner.type !== 'mic-e' || refusalRank(e.code) < refusalRank('text-reads-as-field')) throw e;
+          const destination = attempt(checkShape(inner), 'plain', {}).destination;
+          if (destination === data.packet.destination) throw e;
+          encoded = { information: new Uint8Array(), destination };
+        }
         if (encoded.destination !== undefined && encoded.destination !== data.packet.destination)
           flagLate('not-encodable', `inner Mic-E data computes the destination ${encoded.destination}, not ${JSON.stringify(data.packet.destination)}`);
         info = encoded.information;
