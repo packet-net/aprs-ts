@@ -1052,6 +1052,12 @@ function parseWeatherFields(ctx: DecodeContext, s: string, j: number, options: W
 }
 
 const SOFTWARE_UNIT_RE = /^([A-Za-z])([A-Za-z0-9_-]{2,4})$/;
+/**
+ * Text that starts like a field is not a software type and unit: a letter APRS12c defines followed
+ * by a digit, or `t` followed by `-` and a digit (vectors interpretations.md, "Text after the
+ * weather fields that starts like a field").
+ */
+const LIKE_A_FIELD_RE = /^(?:[csgtrpPhbLl][0-9]|t-[0-9])/;
 
 /**
  * The software type and unit after the weather fields, or the weather comment. A position's
@@ -1076,7 +1082,7 @@ function weatherTail(
   // The software type and unit stand whole in one piece of the text.
   const pieces = lifted.rest.split(/[\u0100\u0101]+/).filter((p) => p.length > 0);
   const m = pieces.length === 1 ? SOFTWARE_UNIT_RE.exec(text) : null;
-  if (m && !/^[0-9]+$/.test(m[2]!)) {
+  if (m && !/^[0-9]+$/.test(m[2]!) && !LIKE_A_FIELD_RE.test(text)) {
     w.software = m[1]!;
     w.unit = m[2]!;
     return out;
