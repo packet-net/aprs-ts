@@ -10,7 +10,7 @@ An APRS (Automatic Packet Reporting System) encoder and decoder for TypeScript.
 - Every APRS symbol by name, with overlays; device identification from the APRS device database.
 - Zero runtime dependencies; ESM only; works in browsers and Node 20 and later. Bytes are `Uint8Array`.
 
-Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.3: every case passes.
+Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.4: every case passes.
 
 It is conformance tested against [aprs-vectors](https://github.com/packet-net/aprs-vectors), the language-neutral test suite shared with the sibling libraries: [aprs-cs](https://github.com/packet-net/aprs-cs) (C#), [aprs-rs](https://github.com/packet-net/aprs-rs) (Rust), [aprs-py](https://github.com/packet-net/aprs-py) (Python), [aprs-c](https://github.com/packet-net/aprs-c) (C) and [aprs-go](https://github.com/packet-net/aprs-go) (Go). The C# and Rust libraries were also compared with this one over a 6.9-million-packet APRS-IS capture.
 
